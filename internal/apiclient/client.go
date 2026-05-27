@@ -3,6 +3,7 @@
 package apiclient
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -59,4 +60,74 @@ func (c *Client) AreaPage(ctx context.Context, lat, lng, radiusKM float64, curso
 		return nil, "", err
 	}
 	return out.Results, out.NextCursor, nil
+}
+
+// SpotInput is the payload for creating a spot via the API. lat/lng have no
+// omitempty so a legitimate 0 coordinate is still sent (the server requires both).
+type SpotInput struct {
+	VenueName string  `json:"venue_name,omitempty"`
+	ESSID     string  `json:"essid"`
+	Password  string  `json:"password,omitempty"`
+	AuthType  string  `json:"auth_type,omitempty"`
+	Lat       float64 `json:"lat"`
+	Lng       float64 `json:"lng"`
+	Notes     string  `json:"notes,omitempty"`
+}
+
+// Login authenticates and returns a bearer token.
+func (c *Client) Login(ctx context.Context, username, password string) (string, error) {
+	body, _ := json.Marshal(map[string]string{"username": username, "password": password})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		c.BaseURL+"/api/auth/login", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("login failed: %s", resp.Status)
+	}
+	var out struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", err
+	}
+	return out.Token, nil
+}
+
+// CreateSpot POSTs a spot with the given bearer token and returns its id.
+func (c *Client) CreateSpot(ctx context.Context, token string, in SpotInput) (string, error) {
+	body, _ := json.Marshal(in)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		c.BaseURL+"/api/spots", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		msg := struct {
+			Error string `json:"error"`
+		}{}
+		_ = json.NewDecoder(resp.Body).Decode(&msg)
+		if msg.Error != "" {
+			return "", fmt.Errorf("%s", msg.Error)
+		}
+		return "", fmt.Errorf("create spot failed: %s", resp.Status)
+	}
+	var out models.Spot
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", err
+	}
+	return out.ID, nil
 }

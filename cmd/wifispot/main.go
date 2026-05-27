@@ -8,11 +8,14 @@ package main
 
 import (
 	"context"
+	"encoding/csv"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/oriolj/wifi_psw_sharer/internal/apiclient"
@@ -33,6 +36,8 @@ func main() {
 	switch os.Args[1] {
 	case "sync":
 		err = cmdSync(os.Args[2:])
+	case "import":
+		err = cmdImport(os.Args[2:])
 	case "nearby":
 		err = cmdNearby(os.Args[2:])
 	case "scan":
@@ -58,6 +63,7 @@ func usage() {
 
 Commands:
   sync     Download public spots for an area into the local cache
+  import   Upload spots from a CSV to the server (requires login)
   nearby   List cached spots near a point (works offline)
   scan     Scan in-range networks and match them to the cache
   connect  Connect to a network using a cached password
@@ -131,6 +137,109 @@ func cmdSync(args []string) error {
 	n, _ := c.Count(ctx)
 	fmt.Printf("synced %d spot(s) within %.0f km; cache now holds %d spot(s) at %s\n",
 		total, min(*radius, serverMaxRadiusKM), n, *dbPath)
+	return nil
+}
+
+func cmdImport(args []string) error {
+	fs := flag.NewFlagSet("import", flag.ExitOnError)
+	server := fs.String("server", env("WIFISPOT_SERVER", "http://localhost:8080"), "server base URL")
+	token := fs.String("token", env("WIFISPOT_TOKEN", ""), "bearer token (or use --username/--password)")
+	username := fs.String("username", "", "account username (logs in to obtain a token)")
+	password := fs.String("password", "", "account password")
+	_ = fs.Parse(args)
+	rest := fs.Args()
+	if len(rest) != 1 {
+		return fmt.Errorf("usage: wifispot import [--server URL] [--token T | --username U --password P] <file.csv>")
+	}
+
+	ctx := context.Background()
+	client := apiclient.New(*server)
+
+	tok := *token
+	if tok == "" {
+		if *username == "" || *password == "" {
+			return fmt.Errorf("provide --token, or --username and --password to log in")
+		}
+		var err error
+		if tok, err = client.Login(ctx, *username, *password); err != nil {
+			return err
+		}
+	}
+
+	f, err := os.Open(rest[0])
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	r := csv.NewReader(f)
+	r.TrimLeadingSpace = true
+	r.FieldsPerRecord = -1 // tolerate hand-edited rows with trailing columns omitted
+	header, err := r.Read()
+	if err != nil {
+		return fmt.Errorf("reading CSV header: %w", err)
+	}
+	col := map[string]int{}
+	for i, h := range header {
+		col[strings.ToLower(strings.TrimSpace(h))] = i
+	}
+	for _, c := range []string{"essid", "lat", "lng"} {
+		if _, ok := col[c]; !ok {
+			return fmt.Errorf("CSV missing required column %q (need at least essid, lat, lng)", c)
+		}
+	}
+	get := func(rec []string, name string) string {
+		if i, ok := col[name]; ok && i < len(rec) {
+			return strings.TrimSpace(rec[i])
+		}
+		return ""
+	}
+
+	added, skipped, failed := 0, 0, 0
+	line := 1
+	for {
+		rec, err := r.Read()
+		if err == io.EOF {
+			break
+		}
+		line++
+		if err != nil {
+			return fmt.Errorf("line %d: %w", line, err)
+		}
+		essid, latStr, lngStr := get(rec, "essid"), get(rec, "lat"), get(rec, "lng")
+		if essid == "" || latStr == "" || lngStr == "" {
+			fmt.Printf("line %d: skipped (missing essid/lat/lng)\n", line)
+			skipped++
+			continue
+		}
+		lat, err1 := strconv.ParseFloat(latStr, 64)
+		lng, err2 := strconv.ParseFloat(lngStr, 64)
+		if err1 != nil || err2 != nil {
+			fmt.Printf("line %d: skipped (invalid lat/lng %q,%q)\n", line, latStr, lngStr)
+			skipped++
+			continue
+		}
+		id, err := client.CreateSpot(ctx, tok, apiclient.SpotInput{
+			VenueName: get(rec, "venue_name"),
+			ESSID:     essid,
+			Password:  get(rec, "password"),
+			AuthType:  get(rec, "auth_type"),
+			Lat:       lat,
+			Lng:       lng,
+			Notes:     get(rec, "notes"),
+		})
+		if err != nil {
+			fmt.Printf("line %d: FAILED %q: %v\n", line, essid, err)
+			failed++
+			continue
+		}
+		fmt.Printf("line %d: added %q (%s)\n", line, essid, id)
+		added++
+	}
+	fmt.Printf("done: %d added, %d skipped, %d failed\n", added, skipped, failed)
+	if failed > 0 {
+		return fmt.Errorf("%d row(s) failed to import", failed)
+	}
 	return nil
 }
 

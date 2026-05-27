@@ -27,6 +27,19 @@ Downloads public spots within `radius` km of the point, following the API's
 `next_cursor` until done, and upserts them into the cache (by id). Records the
 center as the last-sync location.
 
+### `wifispot import [--server URL] [--token T | --username U --password P] <file.csv>`
+Uploads spots from a CSV to the server (this **writes** to the public DB, so it
+requires auth — pass a `--token`, or `--username`/`--password` to log in). The
+CSV header must include at least `essid`, `lat`, `lng`; optional columns:
+`venue_name`, `password`, `auth_type`, `notes`. Rows missing essid/lat/lng are
+skipped with a warning; each row is POSTed to `/api/spots`. See
+[`seed/pending-spots.csv`](../seed/pending-spots.csv) for the format.
+
+```bash
+wifispot import --server http://localhost:8080 \
+  --username oriolj --password '…' seed/pending-spots.csv
+```
+
 ### `wifispot nearby --lat <> --lng <> [--radius 5] [--db PATH]`
 Queries the **local cache** (works fully offline) and prints spots sorted by
 distance, with passwords.
