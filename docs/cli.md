@@ -27,18 +27,32 @@ Downloads public spots within `radius` km of the point, following the API's
 `next_cursor` until done, and upserts them into the cache (by id). Records the
 center as the last-sync location.
 
-### `wifispot import [--server URL] [--token T | --username U --password P] <file.csv>`
+### `wifispot import [--server URL] [--token T | --username U] <file.csv>`
 Uploads spots from a CSV to the server (this **writes** to the public DB, so it
-requires auth — pass a `--token`, or `--username`/`--password` to log in). The
-CSV header must include at least `essid`, `lat`, `lng`; optional columns:
-`venue_name`, `password`, `auth_type`, `notes`. Rows missing essid/lat/lng are
-skipped with a warning; each row is POSTed to `/api/spots`. See
-[`seed/pending-spots.csv`](../seed/pending-spots.csv) for the format.
+requires auth). The CSV header must include at least `essid`, `lat`, `lng`;
+optional columns: `venue_name`, `password`, `auth_type`, `notes`. Every row must
+have the same column count as the header. Rows missing essid/lat/lng are skipped;
+malformed rows are reported and counted but don't abort the run; each valid row
+is POSTed to `/api/spots`. See [`seed/pending-spots.csv`](../seed/pending-spots.csv)
+for the format.
+
+**Credentials** — never pass a password as an argv flag (it leaks via `ps` and
+shell history). Use one of:
 
 ```bash
-wifispot import --server http://localhost:8080 \
-  --username oriolj --password '…' seed/pending-spots.csv
+# Preferred: a token from the environment
+export WIFISPOT_TOKEN=…           # obtain via /api/auth/login
+wifispot import seed/pending-spots.csv
+
+# Or log in by username; the password is read from the env or a no-echo prompt
+export WIFISPOT_PASSWORD=…        # optional; omit to be prompted
+wifispot import --server http://localhost:8080 --username oriolj seed/pending-spots.csv
 ```
+
+**Idempotent**: re-running the same import does not create duplicates — the
+server returns the existing spot when the same user already has one with the same
+SSID at the same coordinates. (`http://` to a non-local host warns, since
+credentials would travel in cleartext — use `https://`.)
 
 ### `wifispot nearby --lat <> --lng <> [--radius 5] [--db PATH]`
 Queries the **local cache** (works fully offline) and prints spots sorted by

@@ -12,11 +12,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"text/tabwriter"
+
+	"golang.org/x/term"
 
 	"github.com/oriolj/wifi_psw_sharer/internal/apiclient"
 	"github.com/oriolj/wifi_psw_sharer/internal/cache"
@@ -143,26 +146,40 @@ func cmdSync(args []string) error {
 func cmdImport(args []string) error {
 	fs := flag.NewFlagSet("import", flag.ExitOnError)
 	server := fs.String("server", env("WIFISPOT_SERVER", "http://localhost:8080"), "server base URL")
-	token := fs.String("token", env("WIFISPOT_TOKEN", ""), "bearer token (or use --username/--password)")
+	token := fs.String("token", env("WIFISPOT_TOKEN", ""), "bearer token (prefer the WIFISPOT_TOKEN env var)")
 	username := fs.String("username", "", "account username (logs in to obtain a token)")
-	password := fs.String("password", "", "account password")
+	// Password defaults from the env, not an argv flag, so it doesn't leak via
+	// `ps`/process listing or shell history; if absent we prompt with no echo.
+	password := fs.String("password", env("WIFISPOT_PASSWORD", ""), "account password (prefer WIFISPOT_PASSWORD env, or be prompted)")
 	_ = fs.Parse(args)
 	rest := fs.Args()
 	if len(rest) != 1 {
-		return fmt.Errorf("usage: wifispot import [--server URL] [--token T | --username U --password P] <file.csv>")
+		return fmt.Errorf("usage: wifispot import [--server URL] [--token T | --username U] <file.csv>")
 	}
+
+	warnInsecureServer(*server)
 
 	ctx := context.Background()
 	client := apiclient.New(*server)
 
 	tok := *token
 	if tok == "" {
-		if *username == "" || *password == "" {
-			return fmt.Errorf("provide --token, or --username and --password to log in")
+		if *username == "" {
+			return fmt.Errorf("provide --token (or WIFISPOT_TOKEN), or --username to log in")
+		}
+		pw := *password
+		if pw == "" {
+			var err error
+			if pw, err = promptPassword(); err != nil {
+				return err
+			}
 		}
 		var err error
-		if tok, err = client.Login(ctx, *username, *password); err != nil {
+		if tok, err = client.Login(ctx, *username, pw); err != nil {
 			return err
+		}
+		if tok == "" {
+			return fmt.Errorf("server returned an empty token")
 		}
 	}
 
@@ -174,7 +191,9 @@ func cmdImport(args []string) error {
 
 	r := csv.NewReader(f)
 	r.TrimLeadingSpace = true
-	r.FieldsPerRecord = -1 // tolerate hand-edited rows with trailing columns omitted
+	// Leave FieldsPerRecord at its default (0): csv enforces that every row has
+	// the same column count as the header, so a misaligned row (e.g. a stray
+	// comma) is reported as a parse error instead of silently shifting columns.
 	header, err := r.Read()
 	if err != nil {
 		return fmt.Errorf("reading CSV header: %w", err)
@@ -204,7 +223,11 @@ func cmdImport(args []string) error {
 		}
 		line++
 		if err != nil {
-			return fmt.Errorf("line %d: %w", line, err)
+			// Count a malformed row as a failure and keep going, so one bad row
+			// doesn't abandon the rest of the file.
+			fmt.Printf("line %d: FAILED (CSV parse error: %v)\n", line, err)
+			failed++
+			continue
 		}
 		essid, latStr, lngStr := get(rec, "essid"), get(rec, "lat"), get(rec, "lng")
 		if essid == "" || latStr == "" || lngStr == "" {
@@ -398,6 +421,30 @@ func env(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// warnInsecureServer warns when credentials would be sent over cleartext http
+// to a non-local host.
+func warnInsecureServer(server string) {
+	u, err := url.Parse(server)
+	if err != nil {
+		return
+	}
+	host := u.Hostname()
+	if u.Scheme == "http" && host != "localhost" && host != "127.0.0.1" && host != "::1" {
+		fmt.Fprintf(os.Stderr, "warning: sending credentials over cleartext http to %q — use https\n", host)
+	}
+}
+
+// promptPassword reads a password from the terminal without echoing it.
+func promptPassword() (string, error) {
+	fmt.Fprint(os.Stderr, "Password: ")
+	b, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return "", fmt.Errorf("reading password: %w", err)
+	}
+	return string(b), nil
 }
 
 func deref(f *float64) float64 {

@@ -1,5 +1,5 @@
 // Package apiclient is a tiny HTTP client for the WiFi Spots backend, used by
-// the CLI to bulk-download public spots for an area.
+// the CLI to bulk-download public spots and to upload spots from a CSV.
 package apiclient
 
 import (
@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -26,6 +27,49 @@ func New(baseURL string) *Client {
 	return &Client{BaseURL: baseURL, HTTP: &http.Client{Timeout: 30 * time.Second}}
 }
 
+// doJSON performs an HTTP request with an optional JSON body and bearer token,
+// checks the status, and decodes the JSON response into out (if non-nil). On a
+// non-wantStatus response it prefers the server's {"error": ...} message.
+func (c *Client) doJSON(ctx context.Context, method, path, token string, body, out any, wantStatus int) error {
+	var reader io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		reader = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, reader)
+	if err != nil {
+		return err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != wantStatus {
+		var e struct {
+			Error string `json:"error"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&e)
+		if e.Error != "" {
+			return fmt.Errorf("%s", e.Error)
+		}
+		return fmt.Errorf("%s %s: %s", method, path, resp.Status)
+	}
+	if out != nil {
+		return json.NewDecoder(resp.Body).Decode(out)
+	}
+	return nil
+}
+
 type areaResponse struct {
 	Results    []*models.Spot `json:"results"`
 	NextCursor string         `json:"next_cursor"`
@@ -41,22 +85,8 @@ func (c *Client) AreaPage(ctx context.Context, lat, lng, radiusKM float64, curso
 	if cursor != "" {
 		q.Set("cursor", cursor)
 	}
-	u := fmt.Sprintf("%s/api/spots/area?%s", c.BaseURL, q.Encode())
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return nil, "", err
-	}
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return nil, "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("server returned %s", resp.Status)
-	}
 	var out areaResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := c.doJSON(ctx, http.MethodGet, "/api/spots/area?"+q.Encode(), "", nil, &out, http.StatusOK); err != nil {
 		return nil, "", err
 	}
 	return out.Results, out.NextCursor, nil
@@ -76,25 +106,12 @@ type SpotInput struct {
 
 // Login authenticates and returns a bearer token.
 func (c *Client) Login(ctx context.Context, username, password string) (string, error) {
-	body, _ := json.Marshal(map[string]string{"username": username, "password": password})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		c.BaseURL+"/api/auth/login", bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("login failed: %s", resp.Status)
-	}
 	var out struct {
 		Token string `json:"token"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	err := c.doJSON(ctx, http.MethodPost, "/api/auth/login", "",
+		map[string]string{"username": username, "password": password}, &out, http.StatusOK)
+	if err != nil {
 		return "", err
 	}
 	return out.Token, nil
@@ -102,31 +119,8 @@ func (c *Client) Login(ctx context.Context, username, password string) (string, 
 
 // CreateSpot POSTs a spot with the given bearer token and returns its id.
 func (c *Client) CreateSpot(ctx context.Context, token string, in SpotInput) (string, error) {
-	body, _ := json.Marshal(in)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		c.BaseURL+"/api/spots", bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusCreated {
-		msg := struct {
-			Error string `json:"error"`
-		}{}
-		_ = json.NewDecoder(resp.Body).Decode(&msg)
-		if msg.Error != "" {
-			return "", fmt.Errorf("%s", msg.Error)
-		}
-		return "", fmt.Errorf("create spot failed: %s", resp.Status)
-	}
 	var out models.Spot
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, "/api/spots", token, in, &out, http.StatusCreated); err != nil {
 		return "", err
 	}
 	return out.ID, nil

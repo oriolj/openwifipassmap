@@ -160,7 +160,17 @@ func (s *Store) DeleteSession(ctx context.Context, token string) error {
 // ---- Spots ----
 
 // CreateSpot inserts a spot, computing its geohash. ID/timestamps are set here.
+//
+// It is idempotent per owner: if the same user already has a spot with the same
+// SSID at the same coordinates, the existing spot is returned instead of a
+// duplicate being inserted (so re-running an import doesn't pile up copies).
+// Scoped to created_by so one user can never overwrite or shadow another's spot.
 func (s *Store) CreateSpot(ctx context.Context, sp *models.Spot) (*models.Spot, error) {
+	if existing, err := s.ownedSpot(ctx, sp.CreatedBy, sp.ESSID, sp.Lat, sp.Lng); err == nil {
+		return existing, nil
+	} else if !errors.Is(err, ErrNotFound) {
+		return nil, err
+	}
 	sp.ID = models.NewID()
 	sp.CreatedAt = nowMS()
 	sp.UpdatedAt = sp.CreatedAt
@@ -180,6 +190,14 @@ func (s *Store) CreateSpot(ctx context.Context, sp *models.Spot) (*models.Spot, 
 // GetSpot fetches a spot by id.
 func (s *Store) GetSpot(ctx context.Context, id string) (*models.Spot, error) {
 	return scanSpot(s.db.QueryRowContext(ctx, spotSelect+` WHERE id = ?`, id))
+}
+
+// ownedSpot returns an existing spot owned by createdBy with the same SSID and
+// exact coordinates, or ErrNotFound. Used for create idempotency.
+func (s *Store) ownedSpot(ctx context.Context, createdBy, essid string, lat, lng float64) (*models.Spot, error) {
+	return scanSpot(s.db.QueryRowContext(ctx,
+		spotSelect+` WHERE created_by = ? AND essid = ? AND lat = ? AND lng = ? LIMIT 1`,
+		createdBy, essid, lat, lng))
 }
 
 // UpdateSpot updates the mutable fields of a spot (recomputing geohash).
