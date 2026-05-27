@@ -21,6 +21,9 @@ import (
 	"github.com/oriolj/wifi_psw_sharer/internal/wifi"
 )
 
+// serverMaxRadiusKM mirrors the backend's area-radius clamp (api.areaMaxRadius).
+const serverMaxRadiusKM = 300.0
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -90,6 +93,12 @@ func cmdSync(args []string) error {
 	if !flagSet(fs, "lat") || !flagSet(fs, "lng") {
 		return fmt.Errorf("--lat and --lng are required")
 	}
+	// The server clamps area radius (areaMaxRadius = 300 km); warn so the user
+	// isn't misled into thinking a larger area was cached.
+	if *radius > serverMaxRadiusKM {
+		fmt.Fprintf(os.Stderr, "warning: server caps area radius at %.0f km; --radius %.0f will be clamped\n",
+			serverMaxRadiusKM, *radius)
+	}
 
 	c, err := openCache(*dbPath)
 	if err != nil {
@@ -121,7 +130,7 @@ func cmdSync(args []string) error {
 	_ = c.SetMeta(ctx, "last_lng", strconv.FormatFloat(*lng, 'f', -1, 64))
 	n, _ := c.Count(ctx)
 	fmt.Printf("synced %d spot(s) within %.0f km; cache now holds %d spot(s) at %s\n",
-		total, *radius, n, *dbPath)
+		total, min(*radius, serverMaxRadiusKM), n, *dbPath)
 	return nil
 }
 
@@ -178,9 +187,14 @@ func cmdScan(args []string) error {
 	// Build an essid → spot lookup from a wide cache query around the world is
 	// not possible offline without coords; instead match against everything by
 	// pulling a generous radius from the last sync center if known.
+	// First match wins, so `scan` shows the same spot's password that `connect`
+	// will use (connect also takes the first ESSID match). Without this, chain
+	// venues reusing one SSID would show one password but connect with another.
 	known := map[string]*models.Spot{}
 	for _, sp := range allCached(c) {
-		known[sp.ESSID] = sp
+		if _, exists := known[sp.ESSID]; !exists {
+			known[sp.ESSID] = sp
+		}
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)

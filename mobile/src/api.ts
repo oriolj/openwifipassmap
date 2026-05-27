@@ -3,8 +3,17 @@
 // The API base is configurable at build time via VITE_API_BASE so the same
 // bundle can target a local backend (dev) or the deployed one (release).
 
-export const API_BASE =
-  import.meta.env.VITE_API_BASE ?? "http://localhost:8080";
+function resolveApiBase(): string {
+  const configured = import.meta.env.VITE_API_BASE;
+  if (configured) return configured;
+  if (import.meta.env.DEV) return "http://localhost:8080";
+  // A production / native build with no VITE_API_BASE would otherwise silently
+  // call localhost on the user's device. Fail loudly so a misconfigured release
+  // is caught before it ships.
+  throw new Error("VITE_API_BASE must be set for production builds");
+}
+
+export const API_BASE = resolveApiBase();
 
 const TOKEN_KEY = "wifispots.token";
 const USER_KEY = "wifispots.user";
@@ -53,7 +62,14 @@ export function getToken(): string | null {
 
 export function getStoredUser(): User | null {
   const raw = localStorage.getItem(USER_KEY);
-  return raw ? (JSON.parse(raw) as User) : null;
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as User;
+  } catch {
+    // Corrupt/partial value — don't crash app startup; clear and move on.
+    clearAuth();
+    return null;
+  }
 }
 
 function setAuth(token: string, user: User) {
@@ -79,6 +95,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (token) headers.set("Authorization", `Bearer ${token}`);
 
   const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  // A 401 while we were sending a token means the session expired/was revoked:
+  // drop the stale auth and let the UI react (auto-logout).
+  if (res.status === 401 && token) {
+    clearAuth();
+    window.dispatchEvent(new Event("wifispots:unauthorized"));
+  }
   if (res.status === 204) return undefined as T;
 
   const body = await res.json().catch(() => ({}));

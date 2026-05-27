@@ -40,8 +40,12 @@ func BoundingBox(lat, lng, radiusKM float64) (minLat, maxLat, minLng, maxLng flo
 	maxLat = clampLat(lat + latDelta)
 	minLng = lng - lngDelta
 	maxLng = lng + lngDelta
-	// Clamp longitude span to a full circle to avoid nonsense bounds for huge radii.
-	if maxLng-minLng >= 360 {
+	// If the box spans the whole globe OR crosses the ±180° antimeridian, widen
+	// longitude to the full range. A naive `lng BETWEEN minLng AND maxLng` would
+	// otherwise miss spots just across the date line; the caller still trims to
+	// the true circle by haversine, so this only costs a little extra scanning
+	// for queries near ±180° (or with a huge radius).
+	if maxLng-minLng >= 360 || minLng < -180 || maxLng > 180 {
 		minLng, maxLng = -180, 180
 	}
 	return

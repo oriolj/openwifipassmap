@@ -38,6 +38,7 @@ type API struct {
 	store     *store.Store
 	allowCORS bool
 	log       *slog.Logger
+	dummyHash string // verified against on unknown-user login to equalize timing
 }
 
 // New returns an API. allowCORS enables permissive CORS for local dev.
@@ -45,7 +46,10 @@ func New(s *store.Store, allowCORS bool, log *slog.Logger) *API {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &API{store: s, allowCORS: allowCORS, log: log}
+	// Precompute a hash so the login path spends the same argon2 time whether or
+	// not the username exists (defeats username enumeration via timing).
+	dummy, _ := auth.HashPassword("timing-equalizer-not-a-real-password")
+	return &API{store: s, allowCORS: allowCORS, log: log, dummyHash: dummy}
 }
 
 // Routes registers the API routes on the given mux under /api/.
@@ -157,7 +161,7 @@ func (a *API) register(w http.ResponseWriter, r *http.Request) {
 		a.serverErr(w, err)
 		return
 	}
-	a.issueToken(w, u)
+	a.issueToken(r.Context(), w, u)
 }
 
 func (a *API) login(w http.ResponseWriter, r *http.Request) {
@@ -167,6 +171,9 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 	}
 	u, err := a.store.GetUserByUsername(r.Context(), strings.TrimSpace(req.Username))
 	if err != nil {
+		// Run a verify against a dummy hash anyway so an unknown username costs
+		// the same wall-clock time as a known one (no enumeration side channel).
+		_, _ = auth.VerifyPassword(req.Password, a.dummyHash)
 		writeErr(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
@@ -175,11 +182,11 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
-	a.issueToken(w, u)
+	a.issueToken(r.Context(), w, u)
 }
 
-func (a *API) issueToken(w http.ResponseWriter, u *models.User) {
-	sess, err := a.store.CreateSession(context.Background(), u.ID, sessionTTL)
+func (a *API) issueToken(ctx context.Context, w http.ResponseWriter, u *models.User) {
+	sess, err := a.store.CreateSession(ctx, u.ID, sessionTTL)
 	if err != nil {
 		a.serverErr(w, err)
 		return
@@ -203,7 +210,7 @@ func (a *API) nearby(w http.ResponseWriter, r *http.Request) {
 	if radius > nearbyMaxRadius {
 		radius = nearbyMaxRadius
 	}
-	spots, err := a.store.Nearby(r.Context(), lat, lng, radius, nearbyResultsCap)
+	spots, truncated, err := a.store.Nearby(r.Context(), lat, lng, radius, nearbyResultsCap)
 	if err != nil {
 		a.serverErr(w, err)
 		return
@@ -211,7 +218,7 @@ func (a *API) nearby(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"results": nonNil(spots),
 		"count":   len(spots),
-		"capped":  len(spots) >= nearbyResultsCap,
+		"capped":  truncated,
 	})
 }
 

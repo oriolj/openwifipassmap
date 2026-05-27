@@ -32,33 +32,56 @@
     const statusEl = document.getElementById('status');
     const resultsEl = document.getElementById('results');
 
+    // Build nodes with textContent (never innerHTML) so user-supplied spot
+    // fields (venue_name, essid, notes) cannot inject HTML/script — these are
+    // public, attacker-controllable values.
+    function el(tag, className, text) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text != null) node.textContent = text;
+      return node;
+    }
+
+    function renderSpot(s) {
+      const li = el('li', 'card bg-base-100 shadow-sm');
+      li.dataset.testid = 'spot';
+      const body = el('div', 'card-body p-4');
+      const row = el('div', 'flex justify-between items-start');
+
+      const info = el('div');
+      info.appendChild(el('h2', 'card-title text-base', s.venue_name || s.essid));
+      info.appendChild(el('p', 'text-sm opacity-70', `${s.essid} · ${s.auth_type}`));
+
+      const dist = el('span', 'badge badge-ghost', s.distance_km != null ? `${s.distance_km.toFixed(1)} km` : '');
+      row.appendChild(info);
+      row.appendChild(dist);
+
+      const link = el('a', 'btn btn-sm btn-outline mt-2 w-fit', 'View & share');
+      link.setAttribute('href', '/s/' + encodeURIComponent(s.id));
+
+      body.appendChild(row);
+      body.appendChild(link);
+      li.appendChild(body);
+      return li;
+    }
+
     async function loadNearby(lat, lng) {
       statusEl.textContent = 'Loading…';
-      const res = await fetch(`/api/spots/nearby?lat=${lat}&lng=${lng}&radius_km=25`);
-      const data = await res.json();
-      resultsEl.innerHTML = '';
-      if (!data.results || data.results.length === 0) {
-        statusEl.textContent = 'No spots found nearby yet. Be the first to add one in the app!';
-        return;
-      }
-      statusEl.textContent = `${data.count} spot(s) nearby`;
-      for (const s of data.results) {
-        const li = document.createElement('li');
-        li.className = 'card bg-base-100 shadow-sm';
-        li.dataset.testid = 'spot';
-        const dist = s.distance_km != null ? `${s.distance_km.toFixed(1)} km` : '';
-        li.innerHTML = `
-          <div class="card-body p-4">
-            <div class="flex justify-between items-start">
-              <div>
-                <h2 class="card-title text-base">${s.venue_name || s.essid}</h2>
-                <p class="text-sm opacity-70">${s.essid} · ${s.auth_type}</p>
-              </div>
-              <span class="badge badge-ghost">${dist}</span>
-            </div>
-            <a href="/s/${s.id}" class="btn btn-sm btn-outline mt-2 w-fit">View &amp; share</a>
-          </div>`;
-        resultsEl.appendChild(li);
+      resultsEl.replaceChildren();
+      try {
+        const res = await fetch(`/api/spots/nearby?lat=${lat}&lng=${lng}&radius_km=25`);
+        if (!res.ok) throw new Error('server returned ' + res.status);
+        const data = await res.json();
+        if (!data.results || data.results.length === 0) {
+          statusEl.textContent = 'No spots found nearby yet. Be the first to add one in the app!';
+          return;
+        }
+        statusEl.textContent = `${data.count} spot(s) nearby`;
+        for (const s of data.results) {
+          resultsEl.appendChild(renderSpot(s));
+        }
+      } catch (err) {
+        statusEl.textContent = 'Could not load spots: ' + (err && err.message ? err.message : 'unknown error');
       }
     }
 

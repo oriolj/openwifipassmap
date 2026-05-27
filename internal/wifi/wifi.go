@@ -68,19 +68,40 @@ func scanDarwin() ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("macOS scan failed: %w", err)
 	}
+	// system_profiler indents a network's NAME one level under its section
+	// header and indents that network's PROPERTIES one level deeper still. We
+	// collect the direct children of the network sections (the SSIDs, which may
+	// legitimately contain spaces) and skip the deeper property lines. This is
+	// best-effort and untested in CI (no macOS available).
+	lines := strings.Split(string(out), "\n")
 	var ssids []string
-	inOther := false
-	for _, line := range strings.Split(string(out), "\n") {
-		t := strings.TrimSpace(line)
-		if strings.HasPrefix(t, "Other Local Wi-Fi Networks:") {
-			inOther = true
+	for i, line := range lines {
+		if h := strings.TrimSpace(line); h != "Other Local Wi-Fi Networks:" && h != "Current Network Information:" {
 			continue
 		}
-		if inOther && strings.HasSuffix(t, ":") && !strings.Contains(t, " ") {
-			ssids = append(ssids, strings.TrimSuffix(t, ":"))
+		sectionIndent := indentOf(line)
+		netIndent := -1
+		for j := i + 1; j < len(lines); j++ {
+			if strings.TrimSpace(lines[j]) == "" {
+				continue
+			}
+			ind := indentOf(lines[j])
+			if ind <= sectionIndent {
+				break // dedent past the section header → section ended
+			}
+			if netIndent == -1 {
+				netIndent = ind // first child establishes the SSID indent level
+			}
+			if ind == netIndent {
+				ssids = append(ssids, strings.TrimSuffix(strings.TrimSpace(lines[j]), ":"))
+			}
 		}
 	}
 	return uniqueNonEmpty(ssids), nil
+}
+
+func indentOf(s string) int {
+	return len(s) - len(strings.TrimLeft(s, " \t"))
 }
 
 func connectDarwin(ssid, password string) error {

@@ -30,6 +30,23 @@ func TestBoundingBoxContainsCircle(t *testing.T) {
 	}
 }
 
+func TestBoundingBoxAntimeridian(t *testing.T) {
+	// Near the date line, the box must widen to the full longitude range so the
+	// SQL prefilter doesn't miss spots just across ±180°.
+	minLat, maxLat, minLng, maxLng := BoundingBox(0, 179.5, 100)
+	if minLng != -180 || maxLng != 180 {
+		t.Fatalf("expected full longitude range near antimeridian, got [%v, %v]", minLng, maxLng)
+	}
+	// A spot ~10 km across the date line (lng = -179.6) must fall within the box.
+	spotLng := -179.6
+	if spotLng < minLng || spotLng > maxLng {
+		t.Fatalf("spot across the date line (%v) should be inside the box", spotLng)
+	}
+	if minLat >= maxLat {
+		t.Fatal("latitude band should still be a valid range")
+	}
+}
+
 func TestEncodePrecision(t *testing.T) {
 	gh := Encode(41.3851, 2.1734, 6)
 	if len(gh) != 6 {

@@ -82,3 +82,34 @@ test("Public web: landing lists a nearby spot and the share page renders it", as
   await expect(page.getByTestId("essid")).toHaveText("Library-Public");
   await expect(page.getByTestId("password")).toHaveText("readmore");
 });
+
+test("Public web: malicious spot fields are rendered as text, not executed (XSS guard)", async ({
+  page,
+  request,
+  context,
+}) => {
+  await context.grantPermissions(["geolocation"]);
+  const username = uniqueUser();
+  const reg = await request.post(`${BACKEND}/api/auth/register`, {
+    data: { username, password: PASSWORD },
+  });
+  const token = (await reg.json()).token as string;
+
+  const payload = '<img src=x onerror="window.__xssfired=true">PwnedCafe';
+  const create = await request.post(`${BACKEND}/api/spots`, {
+    headers: { Authorization: `Bearer ${token}` },
+    data: { venue_name: payload, essid: "Pwn-Net", password: "x", auth_type: "wpa2", lat: 41.3851, lng: 2.1734 },
+  });
+  expect(create.status()).toBe(201);
+
+  await page.goto(`${BACKEND}/`);
+  await page.getByTestId("find-nearby").click();
+  await expect(page.getByTestId("spot").first()).toBeVisible({ timeout: 10_000 });
+
+  // The injected <img> must NOT exist as a real element and its onerror must
+  // never have fired — the payload is rendered as inert text.
+  await expect(page.locator("img[onerror]")).toHaveCount(0);
+  const fired = await page.evaluate(() => (window as unknown as { __xssfired?: boolean }).__xssfired === true);
+  expect(fired).toBe(false);
+  await expect(page.getByText("PwnedCafe")).toBeVisible();
+});

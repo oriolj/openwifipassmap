@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   type Spot,
   type User,
@@ -16,6 +16,16 @@ type View = "nearby" | "add";
 export function App() {
   const [user, setUser] = useState<User | null>(getStoredUser());
   const [view, setView] = useState<View>("nearby");
+
+  // Auto-logout when any API call reports the session is no longer valid.
+  useEffect(() => {
+    const onUnauthorized = () => {
+      setUser(null);
+      setView("nearby");
+    };
+    window.addEventListener("wifispots:unauthorized", onUnauthorized);
+    return () => window.removeEventListener("wifispots:unauthorized", onUnauthorized);
+  }, []);
 
   return (
     <div className="min-h-screen flex flex-col">

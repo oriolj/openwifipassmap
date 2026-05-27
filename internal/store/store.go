@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/oriolj/wifi_psw_sharer/internal/geo"
@@ -39,6 +40,11 @@ func Open(path string) (*Store, error) {
 	if err := db.Ping(); err != nil {
 		return nil, err
 	}
+	// SQLite allows a single writer; cap the pool at one connection so writes
+	// serialize cleanly instead of racing for the WAL lock and hitting
+	// SQLITE_BUSY. Reads are sub-millisecond at this scale; if read throughput
+	// ever matters, split into a separate read-only *sql.DB pool.
+	db.SetMaxOpenConns(1)
 	return &Store{db: db}, nil
 }
 
@@ -72,8 +78,13 @@ func (s *Store) CreateUser(ctx context.Context, username, passwordHash string) (
 		 VALUES (?, ?, ?, 0, ?, ?)`,
 		u.ID, u.Username, u.PasswordHash, u.CreatedAt, u.UpdatedAt)
 	if err != nil {
-		// modernc returns a generic error; treat UNIQUE violations as taken.
-		return nil, ErrUsernameTaken
+		// Only a UNIQUE violation means the username is taken; surface every
+		// other error (locked DB, disk full, …) as itself so it isn't masked
+		// as a 409 and is logged by the caller.
+		if strings.Contains(err.Error(), "UNIQUE constraint") {
+			return nil, ErrUsernameTaken
+		}
+		return nil, err
 	}
 	return u, nil
 }
@@ -248,13 +259,15 @@ func scanSpotRows(sc scanner) (*models.Spot, error) {
 
 // Nearby returns spots within radiusKM of (lat,lng), sorted by distance, capped
 // at limit. It bounding-box prefilters in SQL then trims to the true circle.
-func (s *Store) Nearby(ctx context.Context, lat, lng, radiusKM float64, limit int) ([]*models.Spot, error) {
+// The bool reports whether results were actually truncated by the cap (so the
+// caller can signal "capped" precisely, not by guessing from len == limit).
+func (s *Store) Nearby(ctx context.Context, lat, lng, radiusKM float64, limit int) ([]*models.Spot, bool, error) {
 	minLat, maxLat, minLng, maxLng := geo.BoundingBox(lat, lng, radiusKM)
 	rows, err := s.db.QueryContext(ctx,
 		spotSelect+` WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?`,
 		minLat, maxLat, minLng, maxLng)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer rows.Close()
 
@@ -262,7 +275,7 @@ func (s *Store) Nearby(ctx context.Context, lat, lng, radiusKM float64, limit in
 	for rows.Next() {
 		sp, err := scanSpotRows(rows)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		d := geo.HaversineKM(lat, lng, sp.Lat, sp.Lng)
 		if d <= radiusKM {
@@ -271,13 +284,14 @@ func (s *Store) Nearby(ctx context.Context, lat, lng, radiusKM float64, limit in
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	sortByDistance(out)
-	if limit > 0 && len(out) > limit {
+	truncated := limit > 0 && len(out) > limit
+	if truncated {
 		out = out[:limit]
 	}
-	return out, nil
+	return out, truncated, nil
 }
 
 // Area returns a page of spots inside the bounding box of (lat,lng,radiusKM),

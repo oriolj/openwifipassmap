@@ -65,6 +65,12 @@ func VerifyPassword(password, encoded string) (bool, error) {
 	if err != nil {
 		return false, ErrInvalidHash
 	}
+	// Reject degenerate hashes: a zero-length salt or digest (e.g. a truncated
+	// or tampered row) would otherwise make ConstantTimeCompare of two empty
+	// slices return 1 — i.e. any password would "match".
+	if len(salt) == 0 || len(want) == 0 {
+		return false, ErrInvalidHash
+	}
 	got := argon2.IDKey([]byte(password), salt, time, memory, threads, uint32(len(want)))
 	return subtle.ConstantTimeCompare(got, want) == 1, nil
 }
