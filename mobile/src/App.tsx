@@ -23,14 +23,14 @@ export function App() {
       setUser(null);
       setView("nearby");
     };
-    window.addEventListener("wifispots:unauthorized", onUnauthorized);
-    return () => window.removeEventListener("wifispots:unauthorized", onUnauthorized);
+    window.addEventListener("openwifipassmap:unauthorized", onUnauthorized);
+    return () => window.removeEventListener("openwifipassmap:unauthorized", onUnauthorized);
   }, []);
 
   return (
     <div className="min-h-screen flex flex-col">
       <header className="navbar bg-base-100 shadow-sm">
-        <div className="flex-1 px-2 text-xl font-bold">📶 WiFi Spots</div>
+        <div className="flex-1 px-2 text-xl font-bold">📶 OpenWifiPassMap</div>
         <div className="flex-none px-2">
           {user ? (
             <div className="flex items-center gap-2">

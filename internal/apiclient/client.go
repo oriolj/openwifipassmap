@@ -1,4 +1,4 @@
-// Package apiclient is a tiny HTTP client for the WiFi Spots backend, used by
+// Package apiclient is a tiny HTTP client for the OpenWifiPassMap backend, used by
 // the CLI to bulk-download public spots and to upload spots from a CSV.
 package apiclient
 
@@ -13,10 +13,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/oriolj/wifi_psw_sharer/internal/models"
+	"github.com/oriolj/openwifipassmap/internal/models"
 )
 
-// Client talks to a WiFi Spots server.
+// Client talks to an OpenWifiPassMap server.
 type Client struct {
 	BaseURL string
 	HTTP    *http.Client

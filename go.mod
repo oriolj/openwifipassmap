@@ -1,4 +1,4 @@
-module github.com/oriolj/wifi_psw_sharer
+module github.com/oriolj/openwifipassmap
 
 go 1.26
 

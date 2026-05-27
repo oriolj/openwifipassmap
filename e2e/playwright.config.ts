@@ -37,7 +37,7 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: `sh -c 'DB_PATH=$(mktemp -u /tmp/wifispots-e2e-XXXX.db) DEV=1 ADDR=:${BACKEND_PORT} go run ./cmd/server'`,
+      command: `sh -c 'DB_PATH=$(mktemp -u /tmp/openwifipassmap-e2e-XXXX.db) DEV=1 ADDR=:${BACKEND_PORT} go run ./cmd/server'`,
       cwd: "..",
       url: `${BACKEND_URL}/api/health`,
       reuseExistingServer: false,

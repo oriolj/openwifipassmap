@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Multi-stage build for the WiFi Spots backend (API + public web).
+# Multi-stage build for the OpenWifiPassMap backend (API + public web).
 # Pure-Go SQLite (modernc) → CGO disabled → tiny static binary.
 
 FROM golang:1.26-alpine AS build

@@ -8,8 +8,8 @@ import (
 	"database/sql"
 	"sort"
 
-	"github.com/oriolj/wifi_psw_sharer/internal/geo"
-	"github.com/oriolj/wifi_psw_sharer/internal/models"
+	"github.com/oriolj/openwifipassmap/internal/geo"
+	"github.com/oriolj/openwifipassmap/internal/models"
 
 	_ "modernc.org/sqlite"
 )

@@ -28,8 +28,8 @@ test("capture screenshots", async ({ page, request }) => {
   await page.goto("/");
   await page.evaluate(
     ([t, u]) => {
-      localStorage.setItem("wifispots.token", t);
-      localStorage.setItem("wifispots.user", JSON.stringify({ id: "x", username: u, is_admin: false }));
+      localStorage.setItem("openwifipassmap.token", t);
+      localStorage.setItem("openwifipassmap.user", JSON.stringify({ id: "x", username: u, is_admin: false }));
     },
     [token, username],
   );

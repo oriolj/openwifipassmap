@@ -1,4 +1,4 @@
-# WiFi Spots 📶
+# OpenWifiPassMap 📶
 
 A crowdsourced directory of **public** WiFi — cafés, libraries, public venues —
 with their network name, password, location and notes. Find good WiFi near you,

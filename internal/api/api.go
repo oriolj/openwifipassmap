@@ -1,4 +1,4 @@
-// Package api implements the JSON HTTP API for WiFi Spots.
+// Package api implements the JSON HTTP API for OpenWifiPassMap.
 //
 // Browsing (nearby/area/get) is anonymous. Mutations (create/update/delete)
 // require a bearer-token session; edit/delete additionally require ownership
@@ -16,9 +16,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/oriolj/wifi_psw_sharer/internal/auth"
-	"github.com/oriolj/wifi_psw_sharer/internal/models"
-	"github.com/oriolj/wifi_psw_sharer/internal/store"
+	"github.com/oriolj/openwifipassmap/internal/auth"
+	"github.com/oriolj/openwifipassmap/internal/models"
+	"github.com/oriolj/openwifipassmap/internal/store"
 )
 
 const (

@@ -11,7 +11,7 @@ static binary, alpine runtime, non-root user, `/data` volume, `HEALTHCHECK` on
 `/api/health`, `STOPSIGNAL SIGTERM`.
 
 ```bash
-make docker-build      # docker build -f docker/Dockerfile -t wifispots:latest .
+make docker-build      # docker build -f docker/Dockerfile -t openwifipassmap:latest .
 ```
 
 ## Coolify setup

@@ -1,4 +1,4 @@
-// Command wifispot is an offline-first CLI for the public WiFi Spots directory.
+// Command wifispot is an offline-first CLI for the public OpenWifiPassMap directory.
 //
 //	wifispot sync   --lat 41.39 --lng 2.17 --radius 200   # download an area
 //	wifispot nearby --lat 41.39 --lng 2.17 --radius 5      # query offline cache
@@ -21,10 +21,10 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/oriolj/wifi_psw_sharer/internal/apiclient"
-	"github.com/oriolj/wifi_psw_sharer/internal/cache"
-	"github.com/oriolj/wifi_psw_sharer/internal/models"
-	"github.com/oriolj/wifi_psw_sharer/internal/wifi"
+	"github.com/oriolj/openwifipassmap/internal/apiclient"
+	"github.com/oriolj/openwifipassmap/internal/cache"
+	"github.com/oriolj/openwifipassmap/internal/models"
+	"github.com/oriolj/openwifipassmap/internal/wifi"
 )
 
 // serverMaxRadiusKM mirrors the backend's area-radius clamp (api.areaMaxRadius).

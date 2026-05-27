@@ -1,4 +1,4 @@
-// Command server runs the WiFi Spots backend: the JSON API plus a small
+// Command server runs the OpenWifiPassMap backend: the JSON API plus a small
 // server-rendered public web UI for sharing spots.
 package main
 
@@ -14,10 +14,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/oriolj/wifi_psw_sharer/internal/api"
-	"github.com/oriolj/wifi_psw_sharer/internal/store"
-	"github.com/oriolj/wifi_psw_sharer/internal/web"
-	"github.com/oriolj/wifi_psw_sharer/migrations"
+	"github.com/oriolj/openwifipassmap/internal/api"
+	"github.com/oriolj/openwifipassmap/internal/store"
+	"github.com/oriolj/openwifipassmap/internal/web"
+	"github.com/oriolj/openwifipassmap/migrations"
 )
 
 func main() {

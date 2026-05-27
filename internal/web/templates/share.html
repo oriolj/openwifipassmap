@@ -3,16 +3,16 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{{if .VenueName}}{{.VenueName}}{{else}}{{.ESSID}}{{end}} — WiFi Spots</title>
+  <title>{{if .VenueName}}{{.VenueName}}{{else}}{{.ESSID}}{{end}} — OpenWifiPassMap</title>
   <meta name="description" content="WiFi at {{if .VenueName}}{{.VenueName}}{{else}}{{.ESSID}}{{end}}: network {{.ESSID}}." />
-  <meta property="og:title" content="{{if .VenueName}}{{.VenueName}}{{else}}{{.ESSID}}{{end}} — WiFi Spots" />
+  <meta property="og:title" content="{{if .VenueName}}{{.VenueName}}{{else}}{{.ESSID}}{{end}} — OpenWifiPassMap" />
   <meta property="og:description" content="Network {{.ESSID}} ({{.AuthType}})." />
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://cdn.jsdelivr.net/npm/daisyui@4/dist/full.min.css" rel="stylesheet" type="text/css" />
 </head>
 <body class="min-h-screen bg-base-200">
   <div class="navbar bg-base-100 shadow-sm">
-    <a href="/" class="flex-1 px-4 text-xl font-bold">📶 WiFi Spots</a>
+    <a href="/" class="flex-1 px-4 text-xl font-bold">📶 OpenWifiPassMap</a>
   </div>
 
   <main class="max-w-md mx-auto p-4">

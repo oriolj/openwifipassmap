@@ -1,10 +1,10 @@
-# WiFi Spots — Product & Technical Spec
+# OpenWifiPassMap — Product & Technical Spec
 
 ## Problem & goal
 
 People constantly hunt for usable WiFi in cafés, libraries and public venues —
 and the password is often scrawled on a chalkboard or known only to regulars.
-**WiFi Spots** is a crowdsourced, public directory of those networks: name,
+**OpenWifiPassMap** is a crowdsourced, public directory of those networks: name,
 password, location, notes, and optional quality signals (ping, down/up speed).
 
 Find good WiFi nearby, open a shareable page for a spot, or take a whole region

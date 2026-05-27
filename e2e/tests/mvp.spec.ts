@@ -12,7 +12,7 @@ test("React app: register → add spot → see it nearby → reveal password", a
   const username = uniqueUser();
 
   await page.goto("/");
-  await expect(page.getByText("WiFi Spots").first()).toBeVisible();
+  await expect(page.getByText("OpenWifiPassMap").first()).toBeVisible();
 
   // Register (the auth panel defaults to register mode).
   await page.getByTestId("auth-username").fill(username);

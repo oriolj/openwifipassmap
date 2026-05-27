@@ -10,7 +10,7 @@ import (
 	"html/template"
 	"net/http"
 
-	"github.com/oriolj/wifi_psw_sharer/internal/store"
+	"github.com/oriolj/openwifipassmap/internal/store"
 )
 
 //go:embed templates/*.html

@@ -1,4 +1,4 @@
-# CLAUDE.md — WiFi Spots
+# CLAUDE.md — OpenWifiPassMap
 
 Guidance for AI agents working in this repo. Read this first.
 

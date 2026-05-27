@@ -1,4 +1,4 @@
-// Typed client for the WiFi Spots backend.
+// Typed client for the OpenWifiPassMap backend.
 //
 // The API base is configurable at build time via VITE_API_BASE so the same
 // bundle can target a local backend (dev) or the deployed one (release).
@@ -15,8 +15,8 @@ function resolveApiBase(): string {
 
 export const API_BASE = resolveApiBase();
 
-const TOKEN_KEY = "wifispots.token";
-const USER_KEY = "wifispots.user";
+const TOKEN_KEY = "openwifipassmap.token";
+const USER_KEY = "openwifipassmap.user";
 
 export interface User {
   id: string;
@@ -99,7 +99,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   // drop the stale auth and let the UI react (auto-logout).
   if (res.status === 401 && token) {
     clearAuth();
-    window.dispatchEvent(new Event("wifispots:unauthorized"));
+    window.dispatchEvent(new Event("openwifipassmap:unauthorized"));
   }
   if (res.status === 204) return undefined as T;
 

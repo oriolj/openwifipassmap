@@ -1,4 +1,4 @@
--- WiFi Spots schema. Everything is public by design; no encryption.
+-- OpenWifiPassMap schema. Everything is public by design; no encryption.
 -- Timestamps are unix milliseconds (INTEGER).
 
 CREATE TABLE IF NOT EXISTS users (

@@ -1,16 +1,16 @@
-## WiFi Spots — dev & build tasks.
+## OpenWifiPassMap — dev & build tasks.
 ## Conventions: `make start` is the main local entry point; `make tmux` manages
 ## the project's tmux session.
 
 SHELL := /bin/bash
-TMUX_SESSION := wifi_psw_sharer
+TMUX_SESSION := openwifipassmap
 
 # Backend port. 8080 is conventional but often taken locally (e.g. syncthing);
 # override with `make start PORT=8744`.
 PORT ?= 8080
 API_BASE ?= http://localhost:$(PORT)
 # Point the frontend at the deployed backend for `make start-remote`.
-REMOTE_API ?= https://wifispots.example.com
+REMOTE_API ?= https://openwifipassmap.example.com
 
 GREEN := \033[0;32m
 BLUE  := \033[0;34m
@@ -21,7 +21,7 @@ NC    := \033[0m
         docker-build tmux tmux-new-session clean
 
 help: ## Show this help
-	@echo -e "$(BLUE)WiFi Spots$(NC) — make targets:"
+	@echo -e "$(BLUE)OpenWifiPassMap$(NC) — make targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-18s$(NC) %s\n", $$1, $$2}'
 
@@ -89,7 +89,7 @@ deps: ## Tidy Go deps + install mobile/e2e deps
 	@cd e2e && npm install
 
 docker-build: ## Build the deploy image
-	@docker build -f docker/Dockerfile -t wifispots:latest .
+	@docker build -f docker/Dockerfile -t openwifipassmap:latest .
 
 tmux: ## Attach to (or create) the project tmux session
 	@tmux has-session -t $(TMUX_SESSION) 2>/dev/null && tmux attach -t $(TMUX_SESSION) || \
