@@ -1,0 +1,17 @@
+# Litestream config for continuous SQLite backup to S3-compatible storage.
+# See docs/deployment.md for how to wrap the server with:
+#   litestream replicate -exec "/app/server"
+#
+# Env vars expected (set as runtime-only secrets in Coolify):
+#   LITESTREAM_ACCESS_KEY_ID, LITESTREAM_SECRET_ACCESS_KEY
+#   REPLICA_BUCKET, REPLICA_ENDPOINT (e.g. Backblaze B2 / MinIO)
+
+dbs:
+  - path: /data/wifispot.db
+    replicas:
+      - type: s3
+        bucket: ${REPLICA_BUCKET}
+        path: wifispot.db
+        endpoint: ${REPLICA_ENDPOINT}
+        # everysec sync; restore on boot if the local file is missing.
+        sync-interval: 1s

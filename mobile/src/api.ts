@@ -1,0 +1,136 @@
+// Typed client for the WiFi Spots backend.
+//
+// The API base is configurable at build time via VITE_API_BASE so the same
+// bundle can target a local backend (dev) or the deployed one (release).
+
+export const API_BASE =
+  import.meta.env.VITE_API_BASE ?? "http://localhost:8080";
+
+const TOKEN_KEY = "wifispots.token";
+const USER_KEY = "wifispots.user";
+
+export interface User {
+  id: string;
+  username: string;
+  is_admin: boolean;
+}
+
+export interface Spot {
+  id: string;
+  venue_name: string;
+  essid: string;
+  password: string;
+  auth_type: string;
+  lat: number;
+  lng: number;
+  geohash: string;
+  notes: string;
+  ping_ms?: number;
+  down_mbps?: number;
+  up_mbps?: number;
+  created_by: string;
+  created_at: number;
+  updated_at: number;
+  distance_km?: number;
+}
+
+export interface SpotInput {
+  venue_name?: string;
+  essid: string;
+  password?: string;
+  auth_type?: string;
+  lat: number;
+  lng: number;
+  notes?: string;
+  ping_ms?: number | null;
+  down_mbps?: number | null;
+  up_mbps?: number | null;
+}
+
+export function getToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+export function getStoredUser(): User | null {
+  const raw = localStorage.getItem(USER_KEY);
+  return raw ? (JSON.parse(raw) as User) : null;
+}
+
+function setAuth(token: string, user: User) {
+  localStorage.setItem(TOKEN_KEY, token);
+  localStorage.setItem(USER_KEY, JSON.stringify(user));
+}
+
+export function clearAuth() {
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(USER_KEY);
+}
+
+class ApiError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+  }
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const headers = new Headers(init.headers);
+  headers.set("Content-Type", "application/json");
+  const token = getToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+
+  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  if (res.status === 204) return undefined as T;
+
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new ApiError(res.status, (body as { error?: string }).error ?? res.statusText);
+  }
+  return body as T;
+}
+
+export async function register(username: string, password: string): Promise<User> {
+  const r = await request<{ token: string; user: User }>("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ username, password }),
+  });
+  setAuth(r.token, r.user);
+  return r.user;
+}
+
+export async function login(username: string, password: string): Promise<User> {
+  const r = await request<{ token: string; user: User }>("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ username, password }),
+  });
+  setAuth(r.token, r.user);
+  return r.user;
+}
+
+export async function logout(): Promise<void> {
+  try {
+    await request<void>("/api/auth/logout", { method: "POST" });
+  } finally {
+    clearAuth();
+  }
+}
+
+export interface NearbyResponse {
+  results: Spot[];
+  count: number;
+  capped: boolean;
+}
+
+export async function nearby(lat: number, lng: number, radiusKm = 10): Promise<NearbyResponse> {
+  return request<NearbyResponse>(
+    `/api/spots/nearby?lat=${lat}&lng=${lng}&radius_km=${radiusKm}`,
+  );
+}
+
+export async function createSpot(input: SpotInput): Promise<Spot> {
+  return request<Spot>("/api/spots", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export { ApiError };
