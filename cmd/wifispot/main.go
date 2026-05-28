@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -34,6 +35,35 @@ var defaultServer = "http://localhost:8080"
 
 // serverMaxRadiusKM mirrors the backend's area-radius clamp (api.areaMaxRadius).
 const serverMaxRadiusKM = 300.0
+
+// cityCoords maps a handful of well-known city aliases to their lat/lng so the
+// user can `wifispot sync --city barcelona` instead of remembering coordinates.
+// Keys are lowercase; the helpers below normalise user input.
+var cityCoords = map[string]struct {
+	Lat, Lng float64
+}{
+	"girona":    {41.9831, 2.8249},
+	"barcelona": {41.3851, 2.1734},
+	"madrid":    {40.4168, -3.7038},
+	"berlin":    {52.5200, 13.4050},
+	"sf":        {37.7749, -122.4194},
+	"la":        {34.0522, -118.2437},
+	"nyc":       {40.7128, -74.0060},
+	"london":    {51.5074, -0.1278},
+	"paris":     {48.8566, 2.3522},
+	"lisboa":    {38.7223, -9.1393},
+}
+
+// cityList returns the supported city aliases sorted alphabetically for use in
+// help/error messages.
+func cityList() []string {
+	names := make([]string, 0, len(cityCoords))
+	for k := range cityCoords {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -98,14 +128,28 @@ func openCache(path string) (*cache.Cache, error) {
 
 func cmdSync(args []string) error {
 	fs := flag.NewFlagSet("sync", flag.ExitOnError)
-	lat := fs.Float64("lat", 0, "center latitude (required)")
-	lng := fs.Float64("lng", 0, "center longitude (required)")
+	lat := fs.Float64("lat", 0, "center latitude (required unless --city is given)")
+	lng := fs.Float64("lng", 0, "center longitude (required unless --city is given)")
+	city := fs.String("city", "", "city alias instead of --lat/--lng (one of: "+strings.Join(cityList(), ", ")+")")
 	radius := fs.Float64("radius", 200, "radius in km")
 	server := fs.String("server", env("WIFISPOT_SERVER", defaultServer), "server base URL")
 	dbPath := fs.String("db", defaultCachePath(), "local cache path")
 	_ = fs.Parse(args)
-	if !flagSet(fs, "lat") || !flagSet(fs, "lng") {
-		return fmt.Errorf("--lat and --lng are required")
+	if *city != "" {
+		coords, ok := cityCoords[strings.ToLower(strings.TrimSpace(*city))]
+		if !ok {
+			return fmt.Errorf("unknown --city %q; known: %s", *city, strings.Join(cityList(), ", "))
+		}
+		if !flagSet(fs, "lat") {
+			*lat = coords.Lat
+		}
+		if !flagSet(fs, "lng") {
+			*lng = coords.Lng
+		}
+	}
+	if !flagSet(fs, "lat") && !flagSet(fs, "lng") && *city == "" {
+		return fmt.Errorf("provide --city, or both --lat and --lng (known cities: %s)",
+			strings.Join(cityList(), ", "))
 	}
 	// The server clamps area radius (areaMaxRadius = 300 km); warn so the user
 	// isn't misled into thinking a larger area was cached.
