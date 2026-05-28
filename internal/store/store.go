@@ -22,6 +22,11 @@ const GeohashPrecision = 6
 // ErrNotFound is returned when a row does not exist.
 var ErrNotFound = errors.New("store: not found")
 
+// ErrSelfConfirm is returned when a user tries to confirm their own spot.
+// The spot's creator has already attested by adding it; counting their click
+// would inflate the signal and let single-user spots fake validation.
+var ErrSelfConfirm = errors.New("store: cannot confirm your own spot")
+
 // Store wraps a SQLite database with production-friendly PRAGMAs.
 type Store struct {
 	db *sql.DB
@@ -187,9 +192,17 @@ func (s *Store) CreateSpot(ctx context.Context, sp *models.Spot) (*models.Spot, 
 	return sp, nil
 }
 
-// GetSpot fetches a spot by id.
-func (s *Store) GetSpot(ctx context.Context, id string) (*models.Spot, error) {
-	return scanSpot(s.db.QueryRowContext(ctx, spotSelect+` WHERE id = ?`, id))
+// GetSpot fetches a spot by id, enriched with confirmation stats. viewerID is
+// the requesting user's id (empty for anonymous) and powers ConfirmedByMe.
+func (s *Store) GetSpot(ctx context.Context, id, viewerID string) (*models.Spot, error) {
+	sp, err := scanSpot(s.db.QueryRowContext(ctx, spotSelect+` WHERE id = ?`, id))
+	if err != nil {
+		return nil, err
+	}
+	if err := s.loadConfirmationStats(ctx, viewerID, []*models.Spot{sp}); err != nil {
+		return nil, err
+	}
+	return sp, nil
 }
 
 // ownedSpot returns an existing spot owned by createdBy with the same SSID and
@@ -279,7 +292,8 @@ func scanSpotRows(sc scanner) (*models.Spot, error) {
 // at limit. It bounding-box prefilters in SQL then trims to the true circle.
 // The bool reports whether results were actually truncated by the cap (so the
 // caller can signal "capped" precisely, not by guessing from len == limit).
-func (s *Store) Nearby(ctx context.Context, lat, lng, radiusKM float64, limit int) ([]*models.Spot, bool, error) {
+// viewerID is the requesting user's id (empty for anonymous) for ConfirmedByMe.
+func (s *Store) Nearby(ctx context.Context, lat, lng, radiusKM float64, limit int, viewerID string) ([]*models.Spot, bool, error) {
 	minLat, maxLat, minLng, maxLng := geo.BoundingBox(lat, lng, radiusKM)
 	rows, err := s.db.QueryContext(ctx,
 		spotSelect+` WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?`,
@@ -309,13 +323,17 @@ func (s *Store) Nearby(ctx context.Context, lat, lng, radiusKM float64, limit in
 	if truncated {
 		out = out[:limit]
 	}
+	if err := s.loadConfirmationStats(ctx, viewerID, out); err != nil {
+		return nil, false, err
+	}
 	return out, truncated, nil
 }
 
 // Area returns a page of spots inside the bounding box of (lat,lng,radiusKM),
 // ordered by id for stable cursor pagination. cursor is the last id seen (""
 // for the first page). It returns the page and the next cursor ("" when done).
-func (s *Store) Area(ctx context.Context, lat, lng, radiusKM float64, cursor string, limit int) ([]*models.Spot, string, error) {
+// viewerID is the requesting user's id (empty for anonymous) for ConfirmedByMe.
+func (s *Store) Area(ctx context.Context, lat, lng, radiusKM float64, cursor string, limit int, viewerID string) ([]*models.Spot, string, error) {
 	minLat, maxLat, minLng, maxLng := geo.BoundingBox(lat, lng, radiusKM)
 	rows, err := s.db.QueryContext(ctx,
 		spotSelect+` WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ? AND id > ?
@@ -352,7 +370,73 @@ func (s *Store) Area(ctx context.Context, lat, lng, radiusKM float64, cursor str
 	if scanned == limit {
 		next = lastID
 	}
+	if err := s.loadConfirmationStats(ctx, viewerID, page); err != nil {
+		return nil, "", err
+	}
 	return page, next, nil
+}
+
+// CreateConfirmation records that userID confirmed spotID still works. It is
+// an upsert keyed on (spot_id, user_id): re-confirming the same spot refreshes
+// created_at instead of inserting a duplicate row, so the count stays equal to
+// the number of distinct users. Returns ErrSelfConfirm when the user owns the
+// spot, ErrNotFound when the spot doesn't exist.
+func (s *Store) CreateConfirmation(ctx context.Context, spotID, userID string) error {
+	var createdBy string
+	err := s.db.QueryRowContext(ctx, `SELECT created_by FROM spots WHERE id = ?`, spotID).Scan(&createdBy)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if createdBy == userID {
+		return ErrSelfConfirm
+	}
+	_, err = s.db.ExecContext(ctx,
+		`INSERT INTO confirmations (spot_id, user_id, created_at) VALUES (?, ?, ?)
+		 ON CONFLICT(spot_id, user_id) DO UPDATE SET created_at = excluded.created_at`,
+		spotID, userID, nowMS())
+	return err
+}
+
+// loadConfirmationStats enriches spots in place with LastConfirmedAt,
+// ConfirmationsCount and (when viewerID != "") ConfirmedByMe. Single grouped
+// query so a 200-spot Nearby response stays one round-trip, not 201.
+func (s *Store) loadConfirmationStats(ctx context.Context, viewerID string, spots []*models.Spot) error {
+	if len(spots) == 0 {
+		return nil
+	}
+	byID := make(map[string]*models.Spot, len(spots))
+	args := make([]any, 0, len(spots)+1)
+	args = append(args, viewerID) // for the CASE WHEN match — "" never matches a real uuid
+	for _, sp := range spots {
+		byID[sp.ID] = sp
+		args = append(args, sp.ID)
+	}
+	placeholders := strings.Repeat("?,", len(spots)-1) + "?"
+	rows, err := s.db.QueryContext(ctx, `SELECT spot_id, MAX(created_at), COUNT(*),
+		MAX(CASE WHEN user_id = ? THEN 1 ELSE 0 END)
+		FROM confirmations WHERE spot_id IN (`+placeholders+`) GROUP BY spot_id`, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var spotID string
+		var lastAt int64
+		var count, byMe int
+		if err := rows.Scan(&spotID, &lastAt, &count, &byMe); err != nil {
+			return err
+		}
+		if sp := byID[spotID]; sp != nil {
+			at := lastAt
+			sp.LastConfirmedAt = &at
+			sp.ConfirmationsCount = count
+			sp.ConfirmedByMe = byMe == 1
+		}
+	}
+	return rows.Err()
 }
 
 // CreateReport inserts a moderation report.

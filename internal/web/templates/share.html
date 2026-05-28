@@ -51,6 +51,19 @@
           {{end}}
         </div>
 
+        {{if .LastConfirmedAt}}
+        <div class="alert alert-success alert-sm mt-3 py-2" data-testid="confirmation">
+          <span>
+            ✓ Confirmed working <strong>{{humanizeAgo .LastConfirmedAt}}</strong>
+            · {{.ConfirmationsCount}} {{if eq .ConfirmationsCount 1}}person{{else}}people{{end}}
+          </span>
+        </div>
+        {{else}}
+        <p class="text-xs opacity-60 mt-3" data-testid="confirmation-none">
+          Not yet confirmed by anyone — confirm from the app the next time you connect.
+        </p>
+        {{end}}
+
         <a class="btn btn-primary btn-sm mt-3"
            target="_blank" rel="noopener"
            href="https://www.openstreetmap.org/?mlat={{.Lat}}&mlon={{.Lng}}#map=18/{{.Lat}}/{{.Lng}}">

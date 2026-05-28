@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   type Spot,
   type User,
+  confirmSpot,
   createSpot,
   getStoredUser,
   login,
@@ -10,6 +11,16 @@ import {
   register,
 } from "./api";
 import { getCurrentPosition } from "./location";
+
+function humanizeAgo(ms: number | undefined): string {
+  if (!ms) return "";
+  const d = (Date.now() - ms) / 1000;
+  if (d < 60) return "just now";
+  if (d < 3600) return `${Math.floor(d / 60)} min ago`;
+  if (d < 86400) return `${Math.floor(d / 3600)} h ago`;
+  if (d < 86400 * 30) return `${Math.floor(d / 86400)} days ago`;
+  return `${Math.floor(d / (86400 * 30))} months ago`;
+}
 
 type View = "nearby" | "add";
 
@@ -74,7 +85,7 @@ export function App() {
 
       <main className="flex-1 p-3 max-w-xl w-full mx-auto">
         {!user && <AuthPanel onAuthed={setUser} />}
-        {view === "nearby" && <NearbyView />}
+        {view === "nearby" && <NearbyView user={user} />}
         {view === "add" && user && <AddSpotView />}
         {view === "add" && !user && (
           <p className="alert alert-info mt-3" data-testid="login-required">
@@ -152,7 +163,7 @@ function AuthPanel({ onAuthed }: { onAuthed: (u: User) => void }) {
   );
 }
 
-function NearbyView() {
+function NearbyView({ user }: { user: User | null }) {
   const [spots, setSpots] = useState<Spot[] | null>(null);
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
@@ -173,6 +184,12 @@ function NearbyView() {
     }
   }
 
+  // Replaces a single spot in the list (keyed by id) so SpotCard can hand back
+  // the server's updated stats after a confirm without a full re-fetch.
+  function replaceSpot(updated: Spot) {
+    setSpots((prev) => prev?.map((s) => (s.id === updated.id ? updated : s)) ?? prev);
+  }
+
   return (
     <section>
       <button className="btn btn-primary w-full" data-testid="locate-btn" onClick={find} disabled={busy}>
@@ -183,19 +200,44 @@ function NearbyView() {
       </p>
       <ul className="space-y-2" data-testid="spot-list">
         {spots?.map((s) => (
-          <SpotCard key={s.id} spot={s} />
+          <SpotCard key={s.id} spot={s} user={user} onUpdated={replaceSpot} />
         ))}
       </ul>
     </section>
   );
 }
 
-function SpotCard({ spot }: { spot: Spot }) {
+function SpotCard({
+  spot,
+  user,
+  onUpdated,
+}: {
+  spot: Spot;
+  user: User | null;
+  onUpdated: (s: Spot) => void;
+}) {
   const [revealed, setRevealed] = useState(false);
+  const [confirmError, setConfirmError] = useState("");
+  const [confirming, setConfirming] = useState(false);
   const dist = spot.distance_km != null ? `${spot.distance_km.toFixed(1)} km` : "";
+  const isOwn = user != null && spot.created_by === user.id;
+
+  async function handleConfirm() {
+    setConfirmError("");
+    setConfirming(true);
+    try {
+      const updated = await confirmSpot(spot.id);
+      onUpdated(updated);
+    } catch (err) {
+      setConfirmError(err instanceof Error ? err.message : "Could not confirm");
+    } finally {
+      setConfirming(false);
+    }
+  }
+
   return (
     <li className="card bg-base-100 shadow-sm" data-testid="spot-card">
-      <div className="card-body p-4">
+      <div className="card-body p-4 gap-2">
         <div className="flex justify-between items-start">
           <div>
             <h3 className="font-semibold" data-testid="spot-venue">
@@ -227,6 +269,44 @@ function SpotCard({ spot }: { spot: Spot }) {
           <span className="text-sm opacity-60">Open network</span>
         )}
         {spot.notes && <p className="text-sm opacity-70">{spot.notes}</p>}
+
+        <div className="flex flex-wrap items-center gap-2 mt-1" data-testid="spot-confirm-row">
+          {spot.last_confirmed_at ? (
+            <span className="badge badge-success badge-sm" data-testid="spot-confirmation">
+              ✓ Confirmed {humanizeAgo(spot.last_confirmed_at)} · {spot.confirmations_count}{" "}
+              {spot.confirmations_count === 1 ? "person" : "people"}
+            </span>
+          ) : (
+            <span className="text-xs opacity-60" data-testid="spot-confirmation-none">
+              Not yet confirmed
+            </span>
+          )}
+          {user && !isOwn &&
+            (spot.confirmed_by_me ? (
+              <button
+                className="btn btn-xs btn-ghost"
+                data-testid="confirm-again"
+                onClick={handleConfirm}
+                disabled={confirming}
+              >
+                You confirmed it · refresh
+              </button>
+            ) : (
+              <button
+                className="btn btn-xs btn-success"
+                data-testid="confirm-works"
+                onClick={handleConfirm}
+                disabled={confirming}
+              >
+                {confirming ? "…" : "Confirm works"}
+              </button>
+            ))}
+        </div>
+        {confirmError && (
+          <p className="text-error text-xs" data-testid="confirm-error">
+            {confirmError}
+          </p>
+        )}
       </div>
     </li>
   );

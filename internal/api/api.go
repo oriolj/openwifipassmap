@@ -68,6 +68,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/spots/{id}", h(a.updateSpot))
 	mux.HandleFunc("DELETE /api/spots/{id}", h(a.deleteSpot))
 	mux.HandleFunc("POST /api/spots/{id}/report", h(a.reportSpot))
+	mux.HandleFunc("POST /api/spots/{id}/confirm", h(a.confirmSpot))
 }
 
 // Middleware wraps a handler with optional-CORS handling.
@@ -110,6 +111,15 @@ func bearerToken(r *http.Request) string {
 func userFrom(ctx context.Context) (*models.User, bool) {
 	u, ok := ctx.Value(userCtxKey).(*models.User)
 	return u, ok
+}
+
+// viewerID returns the authed user's id, or "" if the request is anonymous.
+// Used to ask the store for "confirmed_by_me" without requiring auth.
+func viewerID(ctx context.Context) string {
+	if u, ok := userFrom(ctx); ok {
+		return u.ID
+	}
+	return ""
 }
 
 // requireUser returns the authed user or writes 401 and returns false.
@@ -210,7 +220,7 @@ func (a *API) nearby(w http.ResponseWriter, r *http.Request) {
 	if radius > nearbyMaxRadius {
 		radius = nearbyMaxRadius
 	}
-	spots, truncated, err := a.store.Nearby(r.Context(), lat, lng, radius, nearbyResultsCap)
+	spots, truncated, err := a.store.Nearby(r.Context(), lat, lng, radius, nearbyResultsCap, viewerID(r.Context()))
 	if err != nil {
 		a.serverErr(w, err)
 		return
@@ -232,7 +242,7 @@ func (a *API) area(w http.ResponseWriter, r *http.Request) {
 		radius = areaMaxRadius
 	}
 	cursor := r.URL.Query().Get("cursor")
-	spots, next, err := a.store.Area(r.Context(), lat, lng, radius, cursor, areaPageSize)
+	spots, next, err := a.store.Area(r.Context(), lat, lng, radius, cursor, areaPageSize, viewerID(r.Context()))
 	if err != nil {
 		a.serverErr(w, err)
 		return
@@ -244,7 +254,7 @@ func (a *API) area(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) getSpot(w http.ResponseWriter, r *http.Request) {
-	sp, err := a.store.GetSpot(r.Context(), r.PathValue("id"))
+	sp, err := a.store.GetSpot(r.Context(), r.PathValue("id"), viewerID(r.Context()))
 	if errors.Is(err, store.ErrNotFound) {
 		writeErr(w, http.StatusNotFound, "spot not found")
 		return
@@ -326,7 +336,7 @@ func (a *API) updateSpot(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	sp, err := a.store.GetSpot(r.Context(), r.PathValue("id"))
+	sp, err := a.store.GetSpot(r.Context(), r.PathValue("id"), u.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		writeErr(w, http.StatusNotFound, "spot not found")
 		return
@@ -359,7 +369,7 @@ func (a *API) deleteSpot(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	sp, err := a.store.GetSpot(r.Context(), r.PathValue("id"))
+	sp, err := a.store.GetSpot(r.Context(), r.PathValue("id"), u.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		writeErr(w, http.StatusNotFound, "spot not found")
 		return
@@ -394,7 +404,7 @@ func (a *API) reportSpot(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "reason must be wrong_password, gone, spam, or other")
 		return
 	}
-	if _, err := a.store.GetSpot(r.Context(), r.PathValue("id")); errors.Is(err, store.ErrNotFound) {
+	if _, err := a.store.GetSpot(r.Context(), r.PathValue("id"), u.ID); errors.Is(err, store.ErrNotFound) {
 		writeErr(w, http.StatusNotFound, "spot not found")
 		return
 	}
@@ -403,6 +413,36 @@ func (a *API) reportSpot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// confirmSpot records that the authed user attests this spot's credentials
+// still work. Returns the spot with updated confirmation stats so the client
+// doesn't need a follow-up GET. The store's upsert keeps re-confirms cheap.
+func (a *API) confirmSpot(w http.ResponseWriter, r *http.Request) {
+	u, ok := a.requireUser(w, r)
+	if !ok {
+		return
+	}
+	spotID := r.PathValue("id")
+	err := a.store.CreateConfirmation(r.Context(), spotID, u.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "spot not found")
+		return
+	}
+	if errors.Is(err, store.ErrSelfConfirm) {
+		writeErr(w, http.StatusForbidden, "you cannot confirm your own spot")
+		return
+	}
+	if err != nil {
+		a.serverErr(w, err)
+		return
+	}
+	sp, err := a.store.GetSpot(r.Context(), spotID, u.ID)
+	if err != nil {
+		a.serverErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, sp)
 }
 
 // ---- helpers ----

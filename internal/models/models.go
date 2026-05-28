@@ -46,6 +46,22 @@ type Spot struct {
 
 	// DistanceKM is populated only by proximity queries; not stored.
 	DistanceKM *float64 `json:"distance_km,omitempty"`
+
+	// Confirmation aggregates (populated by the store on read; not stored on
+	// the spot row itself). LastConfirmedAt is nil when nobody has confirmed,
+	// ConfirmationsCount is always present (0 when none), and ConfirmedByMe is
+	// only true when the request is authenticated and the caller has confirmed.
+	LastConfirmedAt    *int64 `json:"last_confirmed_at,omitempty"`
+	ConfirmationsCount int    `json:"confirmations_count"`
+	ConfirmedByMe      bool   `json:"confirmed_by_me,omitempty"`
+}
+
+// Confirmation is a user attesting that a spot's credentials work. One row per
+// (spot, user) — re-confirming refreshes created_at.
+type Confirmation struct {
+	SpotID    string `json:"spot_id"`
+	UserID    string `json:"user_id"`
+	CreatedAt int64  `json:"created_at"`
 }
 
 // Report is a lightweight moderation signal.

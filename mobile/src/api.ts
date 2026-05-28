@@ -41,6 +41,9 @@ export interface Spot {
   created_at: number;
   updated_at: number;
   distance_km?: number;
+  last_confirmed_at?: number;
+  confirmations_count: number;
+  confirmed_by_me?: boolean;
 }
 
 export interface SpotInput {
@@ -152,6 +155,16 @@ export async function createSpot(input: SpotInput): Promise<Spot> {
   return request<Spot>("/api/spots", {
     method: "POST",
     body: JSON.stringify(input),
+  });
+}
+
+// confirmSpot attests that the spot's WiFi credentials still work. Server
+// upserts by (spot, user) so re-clicks are idempotent and just refresh the
+// timestamp. Returns the spot with refreshed confirmation stats so the caller
+// can replace the optimistic update with the authoritative count.
+export async function confirmSpot(id: string): Promise<Spot> {
+  return request<Spot>(`/api/spots/${encodeURIComponent(id)}/confirm`, {
+    method: "POST",
   });
 }
 

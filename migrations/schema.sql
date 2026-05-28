@@ -47,3 +47,14 @@ CREATE TABLE IF NOT EXISTS reports (
     created_at       INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_reports_spot ON reports(spot_id);
+
+-- One row per (spot, user): re-confirming refreshes created_at instead of
+-- piling up rows, so count = distinct users and spam by a single account is
+-- bounded structurally.
+CREATE TABLE IF NOT EXISTS confirmations (
+    spot_id    TEXT NOT NULL REFERENCES spots(id) ON DELETE CASCADE,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (spot_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_confirmations_spot_time ON confirmations(spot_id, created_at);

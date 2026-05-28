@@ -7,8 +7,10 @@ package web
 import (
 	"embed"
 	"errors"
+	"fmt"
 	"html/template"
 	"net/http"
+	"time"
 
 	"github.com/oriolj/openwifipassmap/internal/store"
 )
@@ -24,11 +26,35 @@ type Web struct {
 
 // New parses templates and returns a Web.
 func New(s *store.Store) (*Web, error) {
-	t, err := template.ParseFS(tmplFS, "templates/*.html")
+	t, err := template.New("").Funcs(template.FuncMap{
+		"humanizeAgo": humanizeAgo,
+	}).ParseFS(tmplFS, "templates/*.html")
 	if err != nil {
 		return nil, err
 	}
 	return &Web{store: s, tmpl: t}, nil
+}
+
+// humanizeAgo turns a unix-millisecond timestamp into a short relative string
+// ("3 min ago", "2 h ago", "5 days ago"). Accepts a *int64 so Spot's nullable
+// LastConfirmedAt can be passed directly from a template.
+func humanizeAgo(ms *int64) string {
+	if ms == nil || *ms <= 0 {
+		return ""
+	}
+	d := time.Since(time.UnixMilli(*ms))
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%d min ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%d h ago", int(d.Hours()))
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("%d days ago", int(d.Hours()/24))
+	default:
+		return fmt.Sprintf("%d months ago", int(d.Hours()/(24*30)))
+	}
 }
 
 // Routes registers the public web routes.
@@ -42,7 +68,7 @@ func (web *Web) landing(w http.ResponseWriter, r *http.Request) {
 }
 
 func (web *Web) share(w http.ResponseWriter, r *http.Request) {
-	sp, err := web.store.GetSpot(r.Context(), r.PathValue("id"))
+	sp, err := web.store.GetSpot(r.Context(), r.PathValue("id"), "")
 	if errors.Is(err, store.ErrNotFound) {
 		http.Error(w, "spot not found", http.StatusNotFound)
 		return

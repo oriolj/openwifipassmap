@@ -83,6 +83,69 @@ test("Public web: landing lists a nearby spot and the share page renders it", as
   await expect(page.getByTestId("password")).toHaveText("readmore");
 });
 
+test("Confirmation flow: second user confirms a spot and it shows on share + nearby", async ({
+  page,
+  request,
+  context,
+}) => {
+  await context.grantPermissions(["geolocation"]);
+
+  // Owner creates the spot via API.
+  const owner = uniqueUser();
+  const ownerReg = await request.post(`${BACKEND}/api/auth/register`, {
+    data: { username: owner, password: PASSWORD },
+  });
+  const ownerToken = (await ownerReg.json()).token as string;
+
+  const create = await request.post(`${BACKEND}/api/spots`, {
+    headers: { Authorization: `Bearer ${ownerToken}` },
+    data: {
+      venue_name: "Verified Coffee",
+      essid: "Verified-Guest",
+      password: "espresso",
+      auth_type: "wpa2",
+      lat: 41.3855,
+      lng: 2.174,
+    },
+  });
+  expect(create.status()).toBe(201);
+  const spotId = (await create.json()).id as string;
+
+  // Owner cannot confirm own spot.
+  const selfConfirm = await request.post(`${BACKEND}/api/spots/${spotId}/confirm`, {
+    headers: { Authorization: `Bearer ${ownerToken}` },
+  });
+  expect(selfConfirm.status()).toBe(403);
+
+  // A second user confirms the spot (the legitimate path).
+  const visitor = uniqueUser();
+  const visitorReg = await request.post(`${BACKEND}/api/auth/register`, {
+    data: { username: visitor, password: PASSWORD },
+  });
+  const visitorToken = (await visitorReg.json()).token as string;
+
+  const confirm = await request.post(`${BACKEND}/api/spots/${spotId}/confirm`, {
+    headers: { Authorization: `Bearer ${visitorToken}` },
+  });
+  expect(confirm.status()).toBe(200);
+  const after = await confirm.json();
+  expect(after.confirmations_count).toBe(1);
+  expect(after.confirmed_by_me).toBe(true);
+  expect(typeof after.last_confirmed_at).toBe("number");
+
+  // Re-confirming is idempotent (still 1 distinct user).
+  const again = await request.post(`${BACKEND}/api/spots/${spotId}/confirm`, {
+    headers: { Authorization: `Bearer ${visitorToken}` },
+  });
+  expect(again.status()).toBe(200);
+  expect((await again.json()).confirmations_count).toBe(1);
+
+  // Share page surfaces the confirmation badge.
+  await page.goto(`${BACKEND}/s/${spotId}`);
+  await expect(page.getByTestId("confirmation")).toContainText("Confirmed working");
+  await expect(page.getByTestId("confirmation")).toContainText("1 person");
+});
+
 test("Public web: malicious spot fields are rendered as text, not executed (XSS guard)", async ({
   page,
   request,

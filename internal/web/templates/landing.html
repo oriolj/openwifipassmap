@@ -41,17 +41,36 @@
       return n;
     }
 
+    function humanizeAgo(ms) {
+      if (!ms) return '';
+      const d = (Date.now() - ms) / 1000;
+      if (d < 60) return 'just now';
+      if (d < 3600) return Math.floor(d / 60) + ' min ago';
+      if (d < 86400) return Math.floor(d / 3600) + ' h ago';
+      if (d < 86400 * 30) return Math.floor(d / 86400) + ' days ago';
+      return Math.floor(d / (86400 * 30)) + ' months ago';
+    }
+
+    function confirmationBadge(spot) {
+      if (!spot.last_confirmed_at) return null;
+      const text = '✓ Confirmed ' + humanizeAgo(spot.last_confirmed_at)
+        + ' · ' + spot.confirmations_count
+        + (spot.confirmations_count === 1 ? ' person' : ' people');
+      const node = el('span',
+        'badge badge-success badge-sm whitespace-normal text-xs leading-tight h-auto py-1',
+        text);
+      node.dataset.testid = 'confirmation-badge';
+      return node;
+    }
+
     function popupNode(spot) {
       const root = el('div', 'space-y-1');
       root.appendChild(el('strong', 'block', spot.venue_name || spot.essid));
       root.appendChild(el('div', 'text-xs opacity-70', spot.essid + ' · ' + spot.auth_type));
+      const popupBadge = confirmationBadge(spot);
+      if (popupBadge) root.appendChild(popupBadge);
       if (spot.password) {
-        const btn = el('button', 'btn btn-xs btn-outline mt-1', 'Show password');
-        btn.type = 'button';
-        btn.addEventListener('click', () => {
-          btn.replaceWith(el('code', 'font-mono', spot.password));
-        });
-        root.appendChild(btn);
+        root.appendChild(el('code', 'font-mono block mt-1', spot.password));
       } else {
         root.appendChild(el('div', 'text-xs', 'Open network'));
       }
@@ -75,6 +94,8 @@
         spot.distance_km != null ? spot.distance_km.toFixed(1) + ' km' : '');
       head.appendChild(dist);
       body.appendChild(head);
+      const cardBadge = confirmationBadge(spot);
+      if (cardBadge) body.appendChild(cardBadge);
       const link = el('a', 'btn btn-xs btn-outline w-fit', 'View & share');
       link.setAttribute('href', '/s/' + encodeURIComponent(spot.id));
       body.appendChild(link);
@@ -96,11 +117,26 @@
       return 2 * R * Math.asin(Math.sqrt(h));
     }
 
+    function parseViewFromURL() {
+      const p = new URLSearchParams(window.location.search);
+      const lat = parseFloat(p.get('lat'));
+      const lng = parseFloat(p.get('lng'));
+      const zoom = parseInt(p.get('zoom'), 10);
+      if (Number.isFinite(lat) && Number.isFinite(lng) && Number.isFinite(zoom)
+          && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180
+          && zoom >= 0 && zoom <= 19) {
+        return { lat, lng, zoom };
+      }
+      return null;
+    }
+
     // Leaflet is loaded via `defer`; wait for it before initialising.
     window.addEventListener('DOMContentLoaded', () => {
       const statusEl = document.getElementById('status');
       const resultsEl = document.getElementById('results');
-      const map = L.map('map', { worldCopyJump: true }).setView([20, 0], 2);
+      const initial = parseViewFromURL();
+      const map = L.map('map', { worldCopyJump: true })
+        .setView(initial ? [initial.lat, initial.lng] : [20, 0], initial ? initial.zoom : 2);
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
         attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
@@ -150,9 +186,19 @@
         }
       }
 
+      function syncURL() {
+        const c = map.getCenter();
+        const p = new URLSearchParams(window.location.search);
+        p.set('lat', c.lat.toFixed(5));
+        p.set('lng', c.lng.toFixed(5));
+        p.set('zoom', String(map.getZoom()));
+        window.history.replaceState(null, '', window.location.pathname + '?' + p.toString());
+      }
+
       // Debounced reload on every map move/zoom; flyTo also fires moveend.
       let moveTimer;
       map.on('moveend zoomend', () => {
+        syncURL();
         clearTimeout(moveTimer);
         moveTimer = setTimeout(loadSpots, 350);
       });
@@ -177,10 +223,15 @@
 
       document.getElementById('locate').addEventListener('click', () => tryGeolocate(true));
 
-      // First visit: try geolocation silently. If it works, flyTo triggers the
-      // spot load via moveend. If it fails/denies, load the current (default) view
-      // so the user still sees a map with content, not an empty error state.
-      tryGeolocate(false);
+      // If the URL already specifies a view (shared link), honor it and skip
+      // silent geolocation. Otherwise try geolocation silently; on success,
+      // flyTo triggers the spot load via moveend, on failure we load the
+      // default view so the user sees something rather than an empty state.
+      if (initial) {
+        loadSpots();
+      } else {
+        tryGeolocate(false);
+      }
     });
   })();
   </script>
