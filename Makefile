@@ -9,15 +9,17 @@ TMUX_SESSION := openwifipassmap
 # override with `make start PORT=8744`.
 PORT ?= 8080
 API_BASE ?= http://localhost:$(PORT)
-# Point the frontend at the deployed backend for `make start-remote`.
-REMOTE_API ?= https://openwifipassmap.example.com
+# Point the frontend at the deployed backend for `make start-remote`,
+# and bake into the CLI for `make cli-build-prod` / `cli-release-prod`.
+REMOTE_API ?= http://pz8iq8s0ws2g48alkfdki128.91.98.122.198.sslip.io
 
 GREEN := \033[0;32m
 BLUE  := \033[0;34m
 NC    := \033[0m
 
 .PHONY: help start start-local start-remote server mobile web migrate \
-        build cli-build cli-release test test-go e2e fmt vet deps \
+        build cli-build cli-build-prod cli-release cli-release-prod \
+        test test-go e2e fmt vet deps \
         docker-build tmux tmux-new-session clean
 
 help: ## Show this help
@@ -56,9 +58,15 @@ build: ## Build server + CLI into ./bin
 	@go build -o bin/wifispot ./cmd/wifispot
 	@echo -e "$(GREEN)built bin/server and bin/wifispot$(NC)"
 
-cli-build: ## Build the wifispot CLI for the current platform
+cli-build: ## Build the wifispot CLI for the current platform (default server: localhost)
 	@mkdir -p bin && go build -o bin/wifispot ./cmd/wifispot && \
 		echo -e "$(GREEN)built bin/wifispot$(NC)"
+
+cli-build-prod: ## Build the wifispot CLI with REMOTE_API baked in as the default server
+	@mkdir -p bin && go build \
+		-ldflags "-X main.defaultServer=$(REMOTE_API)" \
+		-o bin/wifispot ./cmd/wifispot && \
+		echo -e "$(GREEN)built bin/wifispot → $(REMOTE_API)$(NC)"
 
 cli-release: ## Cross-compile the CLI for linux/macos (amd64+arm64)
 	@mkdir -p dist
@@ -68,6 +76,16 @@ cli-release: ## Cross-compile the CLI for linux/macos (amd64+arm64)
 			go build -o dist/wifispot-$$os-$$arch ./cmd/wifispot; \
 	done; done
 	@echo -e "$(GREEN)CLI binaries in ./dist$(NC)"
+
+cli-release-prod: ## Cross-compile the CLI with REMOTE_API baked in as the default server
+	@mkdir -p dist
+	@for os in linux darwin; do for arch in amd64 arm64; do \
+		echo -e "$(BLUE)building $$os/$$arch → $(REMOTE_API)$(NC)"; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch \
+			go build -ldflags "-X main.defaultServer=$(REMOTE_API)" \
+			-o dist/wifispot-$$os-$$arch ./cmd/wifispot; \
+	done; done
+	@echo -e "$(GREEN)CLI binaries in ./dist (default server: $(REMOTE_API))$(NC)"
 
 test: test-go e2e ## Run Go tests + Playwright e2e
 

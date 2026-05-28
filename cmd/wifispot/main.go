@@ -27,6 +27,11 @@ import (
 	"github.com/oriolj/openwifipassmap/internal/wifi"
 )
 
+// defaultServer is the fallback base URL when neither --server nor
+// WIFISPOT_SERVER is provided. Override at build time with
+// `-ldflags "-X main.defaultServer=https://example.com"`.
+var defaultServer = "http://localhost:8080"
+
 // serverMaxRadiusKM mirrors the backend's area-radius clamp (api.areaMaxRadius).
 const serverMaxRadiusKM = 300.0
 
@@ -96,7 +101,7 @@ func cmdSync(args []string) error {
 	lat := fs.Float64("lat", 0, "center latitude (required)")
 	lng := fs.Float64("lng", 0, "center longitude (required)")
 	radius := fs.Float64("radius", 200, "radius in km")
-	server := fs.String("server", env("WIFISPOT_SERVER", "http://localhost:8080"), "server base URL")
+	server := fs.String("server", env("WIFISPOT_SERVER", defaultServer), "server base URL")
 	dbPath := fs.String("db", defaultCachePath(), "local cache path")
 	_ = fs.Parse(args)
 	if !flagSet(fs, "lat") || !flagSet(fs, "lng") {
@@ -145,7 +150,7 @@ func cmdSync(args []string) error {
 
 func cmdImport(args []string) error {
 	fs := flag.NewFlagSet("import", flag.ExitOnError)
-	server := fs.String("server", env("WIFISPOT_SERVER", "http://localhost:8080"), "server base URL")
+	server := fs.String("server", env("WIFISPOT_SERVER", defaultServer), "server base URL")
 	token := fs.String("token", env("WIFISPOT_TOKEN", ""), "bearer token (prefer the WIFISPOT_TOKEN env var)")
 	username := fs.String("username", "", "account username (logs in to obtain a token)")
 	// Password defaults from the env, not an argv flag, so it doesn't leak via
