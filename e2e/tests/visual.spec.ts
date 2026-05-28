@@ -45,4 +45,10 @@ test("capture screenshots", async ({ page, request }) => {
   await page.goto(`${BACKEND}/s/${lastId}`);
   await page.getByTestId("spot-card").waitFor();
   await page.screenshot({ path: "screenshots/web-share.png", fullPage: true });
+
+  // Public web landing — the map-first view with the in-view list panel.
+  await page.goto(`${BACKEND}/`);
+  await page.getByTestId("spot").first().waitFor({ timeout: 10_000 });
+  await page.waitForTimeout(600); // let tiles + flyTo settle for the screenshot
+  await page.screenshot({ path: "screenshots/web-landing.png" });
 });

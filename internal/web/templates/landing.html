@@ -2,100 +2,187 @@
 <html lang="en" data-theme="emerald">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>OpenWifiPassMap — find public WiFi nearby</title>
-  <meta name="description" content="A crowdsourced directory of public WiFi spots: cafés, libraries and venues with their network and password." />
+  <meta name="description" content="A crowdsourced map of public WiFi spots: cafés, libraries and venues with their network and password." />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin="" defer></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://cdn.jsdelivr.net/npm/daisyui@4/dist/full.min.css" rel="stylesheet" type="text/css" />
+  <style>
+    html, body { height: 100%; margin: 0; }
+    #map { z-index: 0; }
+  </style>
 </head>
-<body class="min-h-screen bg-base-200">
-  <div class="navbar bg-base-100 shadow-sm">
+<body class="bg-base-200 flex flex-col h-screen">
+  <header class="navbar bg-base-100 shadow-sm shrink-0">
     <div class="flex-1 px-4 text-xl font-bold">📶 OpenWifiPassMap</div>
+  </header>
+
+  <div class="flex-1 flex flex-col min-h-0">
+    <div id="map" class="flex-1 min-h-0"></div>
+
+    <aside class="bg-base-100 border-t shrink-0 max-h-[40vh] overflow-y-auto">
+      <div class="flex justify-between items-center px-3 pt-2 gap-2">
+        <span id="status" data-testid="status" class="text-sm opacity-70">Loading…</span>
+        <button id="locate" data-testid="find-nearby" class="btn btn-sm btn-primary">📍 Center on me</button>
+      </div>
+      <ul id="results" data-testid="results" class="grid gap-2 grid-cols-1 sm:grid-cols-2 p-3"></ul>
+    </aside>
   </div>
 
-  <main class="max-w-2xl mx-auto p-4">
-    <div class="hero bg-base-100 rounded-box mb-4">
-      <div class="hero-content text-center">
-        <div>
-          <h1 class="text-2xl font-bold">Public WiFi near you</h1>
-          <p class="py-2 opacity-70">Crowdsourced café &amp; venue WiFi, with passwords. Open and free.</p>
-          <button id="find" class="btn btn-primary" data-testid="find-nearby">Find WiFi nearby</button>
-          <p id="status" class="text-sm opacity-60 mt-2" data-testid="status"></p>
-        </div>
-      </div>
-    </div>
-
-    <ul id="results" class="space-y-2" data-testid="results"></ul>
-  </main>
-
   <script>
-    const statusEl = document.getElementById('status');
-    const resultsEl = document.getElementById('results');
-
-    // Build nodes with textContent (never innerHTML) so user-supplied spot
-    // fields (venue_name, essid, notes) cannot inject HTML/script — these are
-    // public, attacker-controllable values.
+  (function () {
+    // Build nodes with textContent — spot fields are attacker-controllable.
     function el(tag, className, text) {
-      const node = document.createElement(tag);
-      if (className) node.className = className;
-      if (text != null) node.textContent = text;
-      return node;
+      const n = document.createElement(tag);
+      if (className) n.className = className;
+      if (text != null) n.textContent = text;
+      return n;
     }
 
-    function renderSpot(s) {
-      const li = el('li', 'card bg-base-100 shadow-sm');
+    function popupNode(spot) {
+      const root = el('div', 'space-y-1');
+      root.appendChild(el('strong', 'block', spot.venue_name || spot.essid));
+      root.appendChild(el('div', 'text-xs opacity-70', spot.essid + ' · ' + spot.auth_type));
+      if (spot.password) {
+        const btn = el('button', 'btn btn-xs btn-outline mt-1', 'Show password');
+        btn.type = 'button';
+        btn.addEventListener('click', () => {
+          btn.replaceWith(el('code', 'font-mono', spot.password));
+        });
+        root.appendChild(btn);
+      } else {
+        root.appendChild(el('div', 'text-xs', 'Open network'));
+      }
+      if (spot.notes) root.appendChild(el('div', 'text-xs opacity-70', spot.notes));
+      const link = el('a', 'btn btn-xs btn-link p-0 mt-1', 'Open share page');
+      link.setAttribute('href', '/s/' + encodeURIComponent(spot.id));
+      root.appendChild(link);
+      return root;
+    }
+
+    function listItem(spot, map) {
+      const li = el('li', 'card bg-base-200 shadow-sm cursor-pointer');
       li.dataset.testid = 'spot';
-      const body = el('div', 'card-body p-4');
-      const row = el('div', 'flex justify-between items-start');
-
+      const body = el('div', 'card-body p-3 gap-1');
+      const head = el('div', 'flex justify-between items-start gap-2');
       const info = el('div');
-      info.appendChild(el('h2', 'card-title text-base', s.venue_name || s.essid));
-      info.appendChild(el('p', 'text-sm opacity-70', `${s.essid} · ${s.auth_type}`));
-
-      const dist = el('span', 'badge badge-ghost', s.distance_km != null ? `${s.distance_km.toFixed(1)} km` : '');
-      row.appendChild(info);
-      row.appendChild(dist);
-
-      const link = el('a', 'btn btn-sm btn-outline mt-2 w-fit', 'View & share');
-      link.setAttribute('href', '/s/' + encodeURIComponent(s.id));
-
-      body.appendChild(row);
+      info.appendChild(el('h3', 'font-semibold text-sm', spot.venue_name || spot.essid));
+      info.appendChild(el('p', 'text-xs opacity-70', spot.essid + ' · ' + spot.auth_type));
+      head.appendChild(info);
+      const dist = el('span', 'badge badge-ghost text-xs',
+        spot.distance_km != null ? spot.distance_km.toFixed(1) + ' km' : '');
+      head.appendChild(dist);
+      body.appendChild(head);
+      const link = el('a', 'btn btn-xs btn-outline w-fit', 'View & share');
+      link.setAttribute('href', '/s/' + encodeURIComponent(spot.id));
       body.appendChild(link);
       li.appendChild(body);
+      li.addEventListener('click', (e) => {
+        if (e.target.tagName === 'A' || e.target.closest('a')) return;
+        map.flyTo([spot.lat, spot.lng], Math.max(map.getZoom(), 15));
+      });
       return li;
     }
 
-    async function loadNearby(lat, lng) {
-      statusEl.textContent = 'Loading…';
-      resultsEl.replaceChildren();
-      try {
-        const res = await fetch(`/api/spots/nearby?lat=${lat}&lng=${lng}&radius_km=25`);
-        if (!res.ok) throw new Error('server returned ' + res.status);
-        const data = await res.json();
-        if (!data.results || data.results.length === 0) {
-          statusEl.textContent = 'No spots found nearby yet. Be the first to add one in the app!';
-          return;
-        }
-        statusEl.textContent = `${data.count} spot(s) nearby`;
-        for (const s of data.results) {
-          resultsEl.appendChild(renderSpot(s));
-        }
-      } catch (err) {
-        statusEl.textContent = 'Could not load spots: ' + (err && err.message ? err.message : 'unknown error');
-      }
+    function distKm(a, b) {
+      const R = 6371;
+      const dLat = (b.lat - a.lat) * Math.PI / 180;
+      const dLng = (b.lng - a.lng) * Math.PI / 180;
+      const la1 = a.lat * Math.PI / 180;
+      const la2 = b.lat * Math.PI / 180;
+      const h = Math.sin(dLat / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin(dLng / 2) ** 2;
+      return 2 * R * Math.asin(Math.sqrt(h));
     }
 
-    document.getElementById('find').addEventListener('click', () => {
-      if (!navigator.geolocation) {
-        statusEl.textContent = 'Geolocation not supported by this browser.';
-        return;
+    // Leaflet is loaded via `defer`; wait for it before initialising.
+    window.addEventListener('DOMContentLoaded', () => {
+      const statusEl = document.getElementById('status');
+      const resultsEl = document.getElementById('results');
+      const map = L.map('map', { worldCopyJump: true }).setView([20, 0], 2);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      }).addTo(map);
+
+      const markerLayer = L.layerGroup().addTo(map);
+      let reqToken = 0;
+
+      function radiusKm() {
+        const c = map.getCenter();
+        const ne = map.getBounds().getNorthEast();
+        // server caps area radius at 300 km; nothing smaller than 1 km
+        return Math.max(1, Math.min(300, c.distanceTo(ne) / 1000));
       }
-      statusEl.textContent = 'Locating…';
-      navigator.geolocation.getCurrentPosition(
-        (pos) => loadNearby(pos.coords.latitude, pos.coords.longitude),
-        (err) => { statusEl.textContent = 'Location error: ' + err.message; }
-      );
+
+      async function loadSpots() {
+        const my = ++reqToken;
+        const c = map.getCenter();
+        statusEl.textContent = 'Loading…';
+        try {
+          const r = radiusKm();
+          const res = await fetch(`/api/spots/area?lat=${c.lat}&lng=${c.lng}&radius_km=${r.toFixed(2)}`);
+          if (my !== reqToken) return;
+          if (!res.ok) throw new Error('server returned ' + res.status);
+          const data = await res.json();
+          const spots = (data.results || []).map(s => ({
+            ...s,
+            distance_km: distKm(c, { lat: s.lat, lng: s.lng }),
+          })).sort((a, b) => a.distance_km - b.distance_km);
+
+          markerLayer.clearLayers();
+          for (const s of spots) {
+            L.marker([s.lat, s.lng]).addTo(markerLayer).bindPopup(popupNode(s));
+          }
+
+          resultsEl.replaceChildren();
+          for (const s of spots) resultsEl.appendChild(listItem(s, map));
+
+          if (spots.length === 0) {
+            statusEl.textContent = 'No spots in this area yet — pan, zoom, or add one in the app.';
+          } else {
+            statusEl.textContent = `${spots.length} spot(s) in view`;
+          }
+        } catch (err) {
+          if (my !== reqToken) return;
+          statusEl.textContent = 'Could not load spots: ' + (err && err.message ? err.message : 'unknown');
+        }
+      }
+
+      // Debounced reload on every map move/zoom; flyTo also fires moveend.
+      let moveTimer;
+      map.on('moveend zoomend', () => {
+        clearTimeout(moveTimer);
+        moveTimer = setTimeout(loadSpots, 350);
+      });
+
+      function tryGeolocate(explicit) {
+        if (!navigator.geolocation) {
+          if (explicit) statusEl.textContent = 'Geolocation is not supported by this browser.';
+          loadSpots();
+          return;
+        }
+        if (explicit) statusEl.textContent = 'Locating…';
+        navigator.geolocation.getCurrentPosition(
+          (pos) => map.flyTo([pos.coords.latitude, pos.coords.longitude], 13),
+          (err) => {
+            statusEl.textContent = (explicit ? 'Location unavailable: ' + err.message + ' — ' : '')
+              + 'Pan the map to find WiFi, or tap 📍 to use your location.';
+            if (!explicit) loadSpots();
+          },
+          { enableHighAccuracy: true, timeout: 8000 },
+        );
+      }
+
+      document.getElementById('locate').addEventListener('click', () => tryGeolocate(true));
+
+      // First visit: try geolocation silently. If it works, flyTo triggers the
+      // spot load via moveend. If it fails/denies, load the current (default) view
+      // so the user still sees a map with content, not an empty error state.
+      tryGeolocate(false);
     });
+  })();
   </script>
 </body>
 </html>
