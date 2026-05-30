@@ -378,18 +378,28 @@ func cmdScan(args []string) error {
 		}
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(w, "IN RANGE\tKNOWN?\tPASSWORD")
+	// Filter the scan to spots we have cached — unknown SSIDs (and any
+	// passwords the user happens to have for them) are nobody's business.
+	matched := make([]*models.Spot, 0, len(ssids))
 	for _, ssid := range ssids {
 		if sp, ok := known[ssid]; ok {
-			pw := sp.Password
-			if pw == "" {
-				pw = "(open)"
-			}
-			fmt.Fprintf(w, "%s\t✓\t%s\n", ssid, pw)
-		} else {
-			fmt.Fprintf(w, "%s\t-\t\n", ssid)
+			matched = append(matched, sp)
 		}
+	}
+	if len(matched) == 0 {
+		fmt.Printf("detected %d network(s) in range, none known\n", len(ssids))
+		return nil
+	}
+
+	fmt.Printf("detected %d network(s) in range, %d known:\n", len(ssids), len(matched))
+	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
+	fmt.Fprintln(w, "SSID\tPASSWORD")
+	for _, sp := range matched {
+		pw := sp.Password
+		if pw == "" {
+			pw = "(open)"
+		}
+		fmt.Fprintf(w, "%s\t%s\n", sp.ESSID, pw)
 	}
 	return w.Flush()
 }
