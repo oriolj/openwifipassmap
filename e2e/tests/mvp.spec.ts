@@ -83,6 +83,52 @@ test("Public web: landing lists a nearby spot and the share page renders it", as
   await expect(page.getByTestId("password")).toHaveText("readmore");
 });
 
+test("Public web: register → add a spot via the map pin → see it nearby + on share page", async ({
+  page,
+  context,
+}) => {
+  await context.grantPermissions(["geolocation"]); // for the backend origin
+
+  const username = uniqueUser();
+
+  // Start the map at Barcelona deterministically (no reliance on geolocation
+  // timing) so the dropped pin lands where we expect.
+  await page.goto(`${BACKEND}/?lat=41.3851&lng=2.1734&zoom=14`);
+
+  // Adding while logged out opens the auth modal; register inline.
+  await page.getByTestId("add-wifi").click();
+  await expect(page.getByTestId("auth-modal")).toBeVisible();
+  await page.getByTestId("auth-username").fill(username);
+  await page.getByTestId("auth-password").fill(PASSWORD);
+  await page.getByTestId("auth-register").click();
+  await expect(page.getByTestId("account-button")).toContainText(username);
+
+  // Registering mid-flow drops us straight into placement: a pin + pick bar.
+  await expect(page.getByTestId("pick-bar")).toBeVisible();
+  await page.getByTestId("pick-continue").click();
+
+  // Fill the spot form and save.
+  await expect(page.getByTestId("add-modal")).toBeVisible();
+  await page.getByTestId("add-venue").fill("Web Café");
+  await page.getByTestId("add-essid").fill("WebCafe-Guest");
+  await page.getByTestId("add-password").fill("latteart");
+  await page.getByTestId("add-notes").fill("terrace seating");
+  await page.getByTestId("add-save").click();
+
+  await expect(page.getByTestId("toast")).toContainText("added");
+
+  // It reloads into the in-view list. Scope to this venue's card.
+  const card = page.getByTestId("spot").filter({ hasText: "Web Café" });
+  await expect(card).toBeVisible({ timeout: 10_000 });
+
+  // And the credentials render on its shareable page.
+  const link = card.getByRole("link", { name: "View & share" });
+  const href = await link.getAttribute("href");
+  await page.goto(`${BACKEND}${href}`);
+  await expect(page.getByTestId("essid")).toHaveText("WebCafe-Guest");
+  await expect(page.getByTestId("password")).toHaveText("latteart");
+});
+
 test("Confirmation flow: second user confirms a spot and it shows on share + nearby", async ({
   page,
   request,

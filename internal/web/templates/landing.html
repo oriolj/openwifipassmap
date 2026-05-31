@@ -15,12 +15,23 @@
   </style>
 </head>
 <body class="bg-base-200 flex flex-col h-screen">
-  <header class="navbar bg-base-100 shadow-sm shrink-0">
+  <header class="navbar bg-base-100 shadow-sm shrink-0 gap-2">
     <div class="flex-1 px-4 text-xl font-bold">📶 OpenWifiPassMap</div>
+    <button id="add-wifi" data-testid="add-wifi" class="btn btn-sm btn-primary">➕ Add WiFi</button>
+    <div id="account" class="px-2"></div>
   </header>
 
-  <div class="flex-1 flex flex-col min-h-0">
+  <div class="flex-1 flex flex-col min-h-0 relative">
     <div id="map" class="flex-1 min-h-0"></div>
+
+    <!-- Location-pick bar: shown while the user is placing a new spot's pin. -->
+    <div id="pick-bar" data-testid="pick-bar"
+         class="hidden absolute top-2 left-1/2 -translate-x-1/2 z-[1000] w-[92%] max-w-md
+                bg-base-100 shadow-lg rounded-box border p-2 flex items-center gap-2">
+      <span class="text-sm flex-1">📍 Drag the pin to the venue, then continue.</span>
+      <button id="pick-cancel" class="btn btn-ghost btn-xs">Cancel</button>
+      <button id="pick-continue" data-testid="pick-continue" class="btn btn-primary btn-xs">Continue</button>
+    </div>
 
     <aside class="bg-base-100 border-t shrink-0 max-h-[40vh] overflow-y-auto">
       <div class="flex justify-between items-center px-3 pt-2 gap-2">
@@ -29,6 +40,55 @@
       </div>
       <ul id="results" data-testid="results" class="grid gap-2 grid-cols-1 sm:grid-cols-2 p-3"></ul>
     </aside>
+  </div>
+
+  <!-- Auth modal: log in or register so the user can post spots. -->
+  <dialog id="auth-modal" data-testid="auth-modal" class="modal">
+    <div class="modal-box max-w-sm">
+      <h3 class="font-bold text-lg">Log in</h3>
+      <p class="text-sm opacity-70 mb-3">Log in or create an account to add WiFi spots.</p>
+      <form id="auth-form" class="space-y-2">
+        <input id="auth-username" data-testid="auth-username" name="username" autocomplete="username"
+               class="input input-bordered w-full" placeholder="Username" />
+        <input id="auth-password" data-testid="auth-password" name="password" type="password"
+               autocomplete="current-password" class="input input-bordered w-full" placeholder="Password" />
+        <p id="auth-error" data-testid="auth-error" class="text-error text-sm hidden"></p>
+        <div class="modal-action">
+          <button type="button" id="auth-cancel" class="btn btn-ghost btn-sm">Cancel</button>
+          <button type="button" id="auth-register" data-testid="auth-register" class="btn btn-outline btn-sm">Register</button>
+          <button type="submit" id="auth-login" data-testid="auth-login" class="btn btn-primary btn-sm">Log in</button>
+        </div>
+      </form>
+    </div>
+  </dialog>
+
+  <!-- Add-spot modal: opened after a location is picked on the map. -->
+  <dialog id="add-modal" data-testid="add-modal" class="modal">
+    <div class="modal-box max-w-sm">
+      <h3 class="font-bold text-lg">Add a WiFi spot</h3>
+      <p id="add-coords" data-testid="add-coords" class="text-xs opacity-70 mb-3"></p>
+      <form id="add-form" class="space-y-2">
+        <input id="add-venue" data-testid="add-venue" class="input input-bordered w-full" placeholder="Venue name (e.g. Café Luna)" />
+        <input id="add-essid" data-testid="add-essid" class="input input-bordered w-full" placeholder="Network name (SSID) *" required />
+        <select id="add-authtype" data-testid="add-authtype" class="select select-bordered w-full">
+          <option value="wpa2" selected>WPA2</option>
+          <option value="wpa3">WPA3</option>
+          <option value="wep">WEP</option>
+          <option value="open">Open (no password)</option>
+        </select>
+        <input id="add-password" data-testid="add-password" class="input input-bordered w-full" placeholder="Password" />
+        <textarea id="add-notes" data-testid="add-notes" class="textarea textarea-bordered w-full" placeholder="Notes (optional)"></textarea>
+        <p id="add-error" data-testid="add-error" class="text-error text-sm hidden"></p>
+        <div class="modal-action">
+          <button type="button" id="add-cancel" class="btn btn-ghost btn-sm">Cancel</button>
+          <button type="submit" id="add-save" data-testid="add-save" class="btn btn-primary btn-sm">Save spot</button>
+        </div>
+      </form>
+    </div>
+  </dialog>
+
+  <div id="toast" class="toast toast-end z-[2000] hidden">
+    <div id="toast-body" data-testid="toast" class="alert alert-success"></div>
   </div>
 
   <script>
@@ -232,6 +292,203 @@
       } else {
         tryGeolocate(false);
       }
+
+      // ---- Accounts + adding spots -------------------------------------
+      // The public API is the same one the mobile app and CLI use: auth via
+      // bearer token (kept in localStorage), spots posted to /api/spots.
+      const TOKEN_KEY = 'owpm_token';
+      const USER_KEY = 'owpm_user';
+      const accountEl = document.getElementById('account');
+      const authModal = document.getElementById('auth-modal');
+      const addModal = document.getElementById('add-modal');
+      const authError = document.getElementById('auth-error');
+      const addError = document.getElementById('add-error');
+      const pickBar = document.getElementById('pick-bar');
+
+      const getToken = () => localStorage.getItem(TOKEN_KEY);
+      const getUsername = () => localStorage.getItem(USER_KEY);
+
+      function showToast(msg, kind) {
+        const box = document.getElementById('toast-body');
+        box.className = 'alert alert-' + (kind || 'success');
+        box.textContent = msg;
+        const t = document.getElementById('toast');
+        t.classList.remove('hidden');
+        setTimeout(() => t.classList.add('hidden'), 3000);
+      }
+
+      function renderAccount() {
+        accountEl.replaceChildren();
+        const user = getUsername();
+        if (getToken() && user) {
+          const wrap = el('div', 'dropdown dropdown-end');
+          const btn = el('button', 'btn btn-sm btn-ghost', '👤 ' + user);
+          btn.dataset.testid = 'account-button';
+          btn.setAttribute('tabindex', '0');
+          const menu = el('ul', 'dropdown-content menu bg-base-100 rounded-box shadow z-[1000] w-32 p-2');
+          menu.setAttribute('tabindex', '0');
+          const li = el('li');
+          const logout = el('a', null, 'Log out');
+          logout.dataset.testid = 'logout';
+          logout.addEventListener('click', doLogout);
+          li.appendChild(logout);
+          menu.appendChild(li);
+          wrap.appendChild(btn);
+          wrap.appendChild(menu);
+          accountEl.appendChild(wrap);
+        } else {
+          const btn = el('button', 'btn btn-sm btn-ghost', 'Log in');
+          btn.dataset.testid = 'login-button';
+          btn.addEventListener('click', () => openAuth());
+          accountEl.appendChild(btn);
+        }
+      }
+
+      function openAuth() {
+        authError.classList.add('hidden');
+        document.getElementById('auth-form').reset();
+        authModal.showModal();
+      }
+
+      async function submitAuth(kind) {
+        authError.classList.add('hidden');
+        const username = document.getElementById('auth-username').value.trim();
+        const password = document.getElementById('auth-password').value;
+        try {
+          const res = await fetch('/api/auth/' + kind, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || ('server returned ' + res.status));
+          localStorage.setItem(TOKEN_KEY, data.token);
+          localStorage.setItem(USER_KEY, data.user ? data.user.username : username);
+          renderAccount();
+          authModal.close();
+          // If the user was mid-flow trying to add a spot, drop them into it.
+          if (pendingAdd) { pendingAdd = false; beginPlacement(); }
+        } catch (err) {
+          authError.textContent = err.message;
+          authError.classList.remove('hidden');
+        }
+      }
+
+      async function doLogout() {
+        const token = getToken();
+        if (token) {
+          try {
+            await fetch('/api/auth/logout', {
+              method: 'POST',
+              headers: { 'Authorization': 'Bearer ' + token },
+            });
+          } catch (_) { /* best-effort; clear locally regardless */ }
+        }
+        localStorage.removeItem(TOKEN_KEY);
+        localStorage.removeItem(USER_KEY);
+        renderAccount();
+      }
+
+      document.getElementById('auth-login').addEventListener('click', () => submitAuth('login'));
+      document.getElementById('auth-register').addEventListener('click', () => submitAuth('register'));
+      document.getElementById('auth-form').addEventListener('submit', (e) => { e.preventDefault(); submitAuth('login'); });
+      document.getElementById('auth-cancel').addEventListener('click', () => authModal.close());
+
+      // --- Placement: drop a draggable pin so the user sets the location ---
+      let placingMarker = null;
+      let pendingAdd = false; // set when "Add WiFi" was clicked while logged out
+
+      function beginPlacement() {
+        endPlacement();
+        const c = map.getCenter();
+        placingMarker = L.marker([c.lat, c.lng], { draggable: true, autoPan: true }).addTo(map);
+        pickBar.classList.remove('hidden');
+      }
+
+      function endPlacement() {
+        if (placingMarker) { map.removeLayer(placingMarker); placingMarker = null; }
+        pickBar.classList.add('hidden');
+      }
+
+      document.getElementById('add-wifi').addEventListener('click', () => {
+        if (!getToken()) { pendingAdd = true; openAuth(); return; }
+        beginPlacement();
+      });
+      document.getElementById('pick-cancel').addEventListener('click', endPlacement);
+      document.getElementById('pick-continue').addEventListener('click', () => {
+        if (!placingMarker) return;
+        const ll = placingMarker.getLatLng();
+        document.getElementById('add-coords').textContent =
+          'Location: ' + ll.lat.toFixed(5) + ', ' + ll.lng.toFixed(5);
+        addError.classList.add('hidden');
+        document.getElementById('add-form').reset();
+        document.getElementById('add-authtype').value = 'wpa2';
+        syncPasswordEnabled();
+        addModal.showModal();
+      });
+
+      // Open networks have no password — disable the field so the value is empty.
+      function syncPasswordEnabled() {
+        const open = document.getElementById('add-authtype').value === 'open';
+        const pw = document.getElementById('add-password');
+        pw.disabled = open;
+        if (open) pw.value = '';
+      }
+      document.getElementById('add-authtype').addEventListener('change', syncPasswordEnabled);
+
+      async function submitSpot() {
+        addError.classList.add('hidden');
+        if (!placingMarker) { addModal.close(); return; }
+        const ll = placingMarker.getLatLng();
+        const essid = document.getElementById('add-essid').value.trim();
+        if (!essid) {
+          addError.textContent = 'Network name (SSID) is required.';
+          addError.classList.remove('hidden');
+          return;
+        }
+        const body = {
+          venue_name: document.getElementById('add-venue').value.trim(),
+          essid,
+          auth_type: document.getElementById('add-authtype').value,
+          password: document.getElementById('add-password').value,
+          notes: document.getElementById('add-notes').value.trim(),
+          lat: ll.lat,
+          lng: ll.lng,
+        };
+        try {
+          const res = await fetch('/api/spots', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer ' + getToken(),
+            },
+            body: JSON.stringify(body),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.status === 401) {
+            // Session expired — clear it and prompt a fresh login.
+            doLogout();
+            addModal.close();
+            pendingAdd = true;
+            openAuth();
+            return;
+          }
+          if (!res.ok) throw new Error(data.error || ('server returned ' + res.status));
+          addModal.close();
+          endPlacement();
+          showToast('WiFi spot added — thanks!');
+          loadSpots();
+        } catch (err) {
+          addError.textContent = err.message;
+          addError.classList.remove('hidden');
+        }
+      }
+
+      document.getElementById('add-form').addEventListener('submit', (e) => { e.preventDefault(); submitSpot(); });
+      document.getElementById('add-cancel').addEventListener('click', () => { addModal.close(); });
+      addModal.addEventListener('close', () => { /* keep pin so the user can re-open or cancel */ });
+
+      renderAccount();
     });
   })();
   </script>
