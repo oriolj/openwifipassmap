@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -243,49 +242,16 @@ func (s *Store) DeleteSpot(ctx context.Context, id string) error {
 	return nil
 }
 
-const spotSelect = `SELECT id, venue_name, essid, password, auth_type, lat, lng, geohash,
-	notes, ping_ms, down_mbps, up_mbps, created_by, created_at, updated_at FROM spots`
+const spotSelect = `SELECT ` + models.SpotColumns + ` FROM spots`
 
-func scanSpot(row *sql.Row) (*models.Spot, error) {
-	sp, err := scanSpotRows(rowToRows(row))
-	if err != nil {
-		return nil, err
-	}
-	return sp, nil
-}
-
-// rowToRows is a tiny shim so scanSpotRows can serve both *sql.Row and *sql.Rows.
-type singleRow struct{ r *sql.Row }
-
-func rowToRows(r *sql.Row) *singleRow      { return &singleRow{r} }
-func (s *singleRow) Scan(dst ...any) error { return s.r.Scan(dst...) }
-
-type scanner interface{ Scan(dst ...any) error }
-
-func scanSpotRows(sc scanner) (*models.Spot, error) {
-	var sp models.Spot
-	var ping sql.NullInt64
-	var down, up sql.NullFloat64
-	err := sc.Scan(&sp.ID, &sp.VenueName, &sp.ESSID, &sp.Password, &sp.AuthType,
-		&sp.Lat, &sp.Lng, &sp.Geohash, &sp.Notes, &ping, &down, &up,
-		&sp.CreatedBy, &sp.CreatedAt, &sp.UpdatedAt)
+// scanSpot reads one spot row, translating sql.ErrNoRows to ErrNotFound. It
+// accepts both *sql.Row (single-row queries) and *sql.Rows (iteration).
+func scanSpot(sc models.Scanner) (*models.Spot, error) {
+	sp, err := models.ScanSpot(sc)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
-	if err != nil {
-		return nil, err
-	}
-	if ping.Valid {
-		v := int(ping.Int64)
-		sp.PingMS = &v
-	}
-	if down.Valid {
-		sp.DownMbps = &down.Float64
-	}
-	if up.Valid {
-		sp.UpMbps = &up.Float64
-	}
-	return &sp, nil
+	return sp, err
 }
 
 // Nearby returns spots within radiusKM of (lat,lng), sorted by distance, capped
@@ -305,7 +271,7 @@ func (s *Store) Nearby(ctx context.Context, lat, lng, radiusKM float64, limit in
 
 	var out []*models.Spot
 	for rows.Next() {
-		sp, err := scanSpotRows(rows)
+		sp, err := scanSpot(rows)
 		if err != nil {
 			return nil, false, err
 		}
@@ -318,7 +284,7 @@ func (s *Store) Nearby(ctx context.Context, lat, lng, radiusKM float64, limit in
 	if err := rows.Err(); err != nil {
 		return nil, false, err
 	}
-	sortByDistance(out)
+	models.SortByDistance(out)
 	truncated := limit > 0 && len(out) > limit
 	if truncated {
 		out = out[:limit]
@@ -348,7 +314,7 @@ func (s *Store) Area(ctx context.Context, lat, lng, radiusKM float64, cursor str
 	var lastID string
 	scanned := 0
 	for rows.Next() {
-		sp, err := scanSpotRows(rows)
+		sp, err := scanSpot(rows)
 		if err != nil {
 			return nil, "", err
 		}
@@ -459,17 +425,4 @@ func (s *Store) CreateReport(ctx context.Context, spotID, reason, reporterID str
 		return nil, err
 	}
 	return r, nil
-}
-
-func sortByDistance(spots []*models.Spot) {
-	sort.Slice(spots, func(i, j int) bool {
-		return deref(spots[i].DistanceKM) < deref(spots[j].DistanceKM)
-	})
-}
-
-func deref(f *float64) float64 {
-	if f == nil {
-		return 0
-	}
-	return *f
 }

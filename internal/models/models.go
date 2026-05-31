@@ -3,8 +3,10 @@ package models
 
 import (
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"sort"
 )
 
 // User is a contributor. Browsing is anonymous; an account is only needed to
@@ -88,6 +90,55 @@ func NewID() string {
 	b[6] = (b[6] & 0x0f) | 0x40 // version 4
 	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+// SpotColumns is the canonical SELECT column order for a spot row, shared by
+// the server store and the CLI cache so both stay in lock-step with ScanSpot.
+const SpotColumns = `id, venue_name, essid, password, auth_type, lat, lng, geohash, notes,
+	ping_ms, down_mbps, up_mbps, created_by, created_at, updated_at`
+
+// Scanner is the read side shared by *sql.Row and *sql.Rows, letting the store
+// and the CLI cache reuse one spot-row scanner.
+type Scanner interface{ Scan(dst ...any) error }
+
+// ScanSpot reads one spot row from sc in SpotColumns order, mapping the three
+// nullable speed columns onto their pointer fields. It returns the raw scan
+// error (including sql.ErrNoRows) for the caller to interpret.
+func ScanSpot(sc Scanner) (*Spot, error) {
+	var sp Spot
+	var ping sql.NullInt64
+	var down, up sql.NullFloat64
+	if err := sc.Scan(&sp.ID, &sp.VenueName, &sp.ESSID, &sp.Password, &sp.AuthType,
+		&sp.Lat, &sp.Lng, &sp.Geohash, &sp.Notes, &ping, &down, &up,
+		&sp.CreatedBy, &sp.CreatedAt, &sp.UpdatedAt); err != nil {
+		return nil, err
+	}
+	if ping.Valid {
+		v := int(ping.Int64)
+		sp.PingMS = &v
+	}
+	if down.Valid {
+		sp.DownMbps = &down.Float64
+	}
+	if up.Valid {
+		sp.UpMbps = &up.Float64
+	}
+	return &sp, nil
+}
+
+// SortByDistance sorts spots ascending by DistanceKM (a nil distance sorts as 0).
+func SortByDistance(spots []*Spot) {
+	sort.Slice(spots, func(i, j int) bool {
+		return DerefF64(spots[i].DistanceKM) < DerefF64(spots[j].DistanceKM)
+	})
+}
+
+// DerefF64 returns *f, or 0 when f is nil.
+func DerefF64(f *float64) float64 {
+	if f == nil {
+		return 0
+	}
+	return *f
 }
 
 // NewToken returns a 32-byte random token, hex-encoded.

@@ -460,7 +460,7 @@ func printSpots(spots []*models.Spot) {
 		if pw == "" {
 			pw = "(open)"
 		}
-		fmt.Fprintf(w, "%.1f\t%s\t%s\t%s\t%s\n", deref(sp.DistanceKM), venue, sp.ESSID, sp.AuthType, pw)
+		fmt.Fprintf(w, "%.1f\t%s\t%s\t%s\t%s\n", models.DerefF64(sp.DistanceKM), venue, sp.ESSID, sp.AuthType, pw)
 	}
 	_ = w.Flush()
 }
@@ -504,11 +504,4 @@ func promptPassword() (string, error) {
 		return "", fmt.Errorf("reading password: %w", err)
 	}
 	return string(b), nil
-}
-
-func deref(f *float64) float64 {
-	if f == nil {
-		return 0
-	}
-	return *f
 }

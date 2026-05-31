@@ -331,22 +331,33 @@ func (a *API) createSpot(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, created)
 }
 
+// loadOwnedSpot fetches the spot at the request's {id} path value and verifies
+// u may mutate it (owner or admin). It writes the matching error response and
+// returns ok=false on miss/forbidden; action names the verb for the 403 message.
+func (a *API) loadOwnedSpot(w http.ResponseWriter, r *http.Request, u *models.User, action string) (*models.Spot, bool) {
+	sp, err := a.store.GetSpot(r.Context(), r.PathValue("id"), u.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "spot not found")
+		return nil, false
+	}
+	if err != nil {
+		a.serverErr(w, err)
+		return nil, false
+	}
+	if sp.CreatedBy != u.ID && !u.IsAdmin {
+		writeErr(w, http.StatusForbidden, "you can only "+action+" your own spots")
+		return nil, false
+	}
+	return sp, true
+}
+
 func (a *API) updateSpot(w http.ResponseWriter, r *http.Request) {
 	u, ok := a.requireUser(w, r)
 	if !ok {
 		return
 	}
-	sp, err := a.store.GetSpot(r.Context(), r.PathValue("id"), u.ID)
-	if errors.Is(err, store.ErrNotFound) {
-		writeErr(w, http.StatusNotFound, "spot not found")
-		return
-	}
-	if err != nil {
-		a.serverErr(w, err)
-		return
-	}
-	if sp.CreatedBy != u.ID && !u.IsAdmin {
-		writeErr(w, http.StatusForbidden, "you can only edit your own spots")
+	sp, ok := a.loadOwnedSpot(w, r, u, "edit")
+	if !ok {
 		return
 	}
 	var req spotReq
@@ -369,17 +380,8 @@ func (a *API) deleteSpot(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	sp, err := a.store.GetSpot(r.Context(), r.PathValue("id"), u.ID)
-	if errors.Is(err, store.ErrNotFound) {
-		writeErr(w, http.StatusNotFound, "spot not found")
-		return
-	}
-	if err != nil {
-		a.serverErr(w, err)
-		return
-	}
-	if sp.CreatedBy != u.ID && !u.IsAdmin {
-		writeErr(w, http.StatusForbidden, "you can only delete your own spots")
+	sp, ok := a.loadOwnedSpot(w, r, u, "delete")
+	if !ok {
 		return
 	}
 	if err := a.store.DeleteSpot(r.Context(), sp.ID); err != nil {

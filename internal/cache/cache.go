@@ -6,7 +6,6 @@ package cache
 import (
 	"context"
 	"database/sql"
-	"sort"
 
 	"github.com/oriolj/openwifipassmap/internal/geo"
 	"github.com/oriolj/openwifipassmap/internal/models"
@@ -74,8 +73,7 @@ func (c *Cache) SetMeta(ctx context.Context, key, value string) error {
 func (c *Cache) Nearby(ctx context.Context, lat, lng, radiusKM float64) ([]*models.Spot, error) {
 	minLat, maxLat, minLng, maxLng := geo.BoundingBox(lat, lng, radiusKM)
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT id, venue_name, essid, password, auth_type, lat, lng, geohash, notes,
-		 ping_ms, down_mbps, up_mbps, created_by, created_at, updated_at
+		`SELECT `+models.SpotColumns+`
 		 FROM spots WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?`,
 		minLat, maxLat, minLng, maxLng)
 	if err != nil {
@@ -85,33 +83,19 @@ func (c *Cache) Nearby(ctx context.Context, lat, lng, radiusKM float64) ([]*mode
 
 	var out []*models.Spot
 	for rows.Next() {
-		var sp models.Spot
-		var ping sql.NullInt64
-		var down, up sql.NullFloat64
-		if err := rows.Scan(&sp.ID, &sp.VenueName, &sp.ESSID, &sp.Password, &sp.AuthType,
-			&sp.Lat, &sp.Lng, &sp.Geohash, &sp.Notes, &ping, &down, &up,
-			&sp.CreatedBy, &sp.CreatedAt, &sp.UpdatedAt); err != nil {
+		sp, err := models.ScanSpot(rows)
+		if err != nil {
 			return nil, err
-		}
-		if ping.Valid {
-			v := int(ping.Int64)
-			sp.PingMS = &v
-		}
-		if down.Valid {
-			sp.DownMbps = &down.Float64
-		}
-		if up.Valid {
-			sp.UpMbps = &up.Float64
 		}
 		d := geo.HaversineKM(lat, lng, sp.Lat, sp.Lng)
 		if d <= radiusKM {
 			sp.DistanceKM = &d
-			out = append(out, &sp)
+			out = append(out, sp)
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	sort.Slice(out, func(i, j int) bool { return *out[i].DistanceKM < *out[j].DistanceKM })
+	models.SortByDistance(out)
 	return out, nil
 }
