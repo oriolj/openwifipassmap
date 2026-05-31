@@ -304,17 +304,21 @@
       const authError = document.getElementById('auth-error');
       const addError = document.getElementById('add-error');
       const pickBar = document.getElementById('pick-bar');
+      const toastEl = document.getElementById('toast');
+      const toastBody = document.getElementById('toast-body');
+      const authForm = document.getElementById('auth-form');
+      const addForm = document.getElementById('add-form');
+      const addAuthType = document.getElementById('add-authtype');
+      const addPassword = document.getElementById('add-password');
 
       const getToken = () => localStorage.getItem(TOKEN_KEY);
       const getUsername = () => localStorage.getItem(USER_KEY);
 
       function showToast(msg, kind) {
-        const box = document.getElementById('toast-body');
-        box.className = 'alert alert-' + (kind || 'success');
-        box.textContent = msg;
-        const t = document.getElementById('toast');
-        t.classList.remove('hidden');
-        setTimeout(() => t.classList.add('hidden'), 3000);
+        toastBody.className = 'alert alert-' + (kind || 'success');
+        toastBody.textContent = msg;
+        toastEl.classList.remove('hidden');
+        setTimeout(() => toastEl.classList.add('hidden'), 3000);
       }
 
       function renderAccount() {
@@ -346,7 +350,7 @@
 
       function openAuth() {
         authError.classList.add('hidden');
-        document.getElementById('auth-form').reset();
+        authForm.reset();
         authModal.showModal();
       }
 
@@ -391,7 +395,7 @@
 
       document.getElementById('auth-login').addEventListener('click', () => submitAuth('login'));
       document.getElementById('auth-register').addEventListener('click', () => submitAuth('register'));
-      document.getElementById('auth-form').addEventListener('submit', (e) => { e.preventDefault(); submitAuth('login'); });
+      authForm.addEventListener('submit', (e) => { e.preventDefault(); submitAuth('login'); });
       document.getElementById('auth-cancel').addEventListener('click', () => authModal.close());
 
       // --- Placement: drop a draggable pin so the user sets the location ---
@@ -421,20 +425,19 @@
         document.getElementById('add-coords').textContent =
           'Location: ' + ll.lat.toFixed(5) + ', ' + ll.lng.toFixed(5);
         addError.classList.add('hidden');
-        document.getElementById('add-form').reset();
-        document.getElementById('add-authtype').value = 'wpa2';
+        addForm.reset();
+        addAuthType.value = 'wpa2';
         syncPasswordEnabled();
         addModal.showModal();
       });
 
       // Open networks have no password — disable the field so the value is empty.
       function syncPasswordEnabled() {
-        const open = document.getElementById('add-authtype').value === 'open';
-        const pw = document.getElementById('add-password');
-        pw.disabled = open;
-        if (open) pw.value = '';
+        const open = addAuthType.value === 'open';
+        addPassword.disabled = open;
+        if (open) addPassword.value = '';
       }
-      document.getElementById('add-authtype').addEventListener('change', syncPasswordEnabled);
+      addAuthType.addEventListener('change', syncPasswordEnabled);
 
       async function submitSpot() {
         addError.classList.add('hidden');
@@ -449,8 +452,8 @@
         const body = {
           venue_name: document.getElementById('add-venue').value.trim(),
           essid,
-          auth_type: document.getElementById('add-authtype').value,
-          password: document.getElementById('add-password').value,
+          auth_type: addAuthType.value,
+          password: addPassword.value,
           notes: document.getElementById('add-notes').value.trim(),
           lat: ll.lat,
           lng: ll.lng,
@@ -484,9 +487,10 @@
         }
       }
 
-      document.getElementById('add-form').addEventListener('submit', (e) => { e.preventDefault(); submitSpot(); });
+      addForm.addEventListener('submit', (e) => { e.preventDefault(); submitSpot(); });
       document.getElementById('add-cancel').addEventListener('click', () => { addModal.close(); });
-      addModal.addEventListener('close', () => { /* keep pin so the user can re-open or cancel */ });
+      // The pin is intentionally kept on modal close so the user can re-open and
+      // adjust; endPlacement() runs only on explicit cancel or a successful save.
 
       renderAccount();
     });
