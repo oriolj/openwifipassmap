@@ -11,7 +11,7 @@ PORT ?= 8080
 API_BASE ?= http://localhost:$(PORT)
 # Point the frontend at the deployed backend for `make start-remote`,
 # and bake into the CLI for `make cli-build-prod` / `cli-release-prod`.
-REMOTE_API ?= http://pz8iq8s0ws2g48alkfdki128.91.98.122.198.sslip.io
+REMOTE_API ?= https://openwifipassmap.oriolj.com
 
 GREEN := \033[0;32m
 BLUE  := \033[0;34m
