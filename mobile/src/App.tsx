@@ -103,38 +103,39 @@ function AuthPanel({ onAuthed }: { onAuthed: (u: User) => void }) {
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+  // error and notice are mutually exclusive, so one nullable value covers both.
+  const [feedback, setFeedback] = useState<{ kind: "error" | "notice"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+
+  const fail = (err: unknown) =>
+    setFeedback({ kind: "error", text: err instanceof Error ? err.message : "Something went wrong" });
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    setError("");
-    setNotice("");
+    setFeedback(null);
     setBusy(true);
     try {
       const u =
         mode === "register" ? await register(username, email, password) : await login(username, password);
       onAuthed(u);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
+      fail(err);
     } finally {
       setBusy(false);
     }
   }
 
   async function forgot() {
-    setError("");
-    setNotice("");
+    setFeedback(null);
     if (!email.trim()) {
-      setError("Enter your email above, then tap “Forgot password?”.");
+      setFeedback({ kind: "error", text: "Enter your email above, then tap “Forgot password?”." });
       return;
     }
     setBusy(true);
     try {
-      setNotice(await forgotPassword(email));
+      setFeedback({ kind: "notice", text: await forgotPassword(email) });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
+      fail(err);
     } finally {
       setBusy(false);
     }
@@ -169,14 +170,12 @@ function AuthPanel({ onAuthed }: { onAuthed: (u: User) => void }) {
           value={password}
           onChange={(e) => setPassword(e.target.value)}
         />
-        {error && (
-          <p className="text-error text-sm" data-testid="auth-error">
-            {error}
-          </p>
-        )}
-        {notice && (
-          <p className="text-success text-sm" data-testid="auth-notice">
-            {notice}
+        {feedback && (
+          <p
+            className={feedback.kind === "error" ? "text-error text-sm" : "text-success text-sm"}
+            data-testid={feedback.kind === "error" ? "auth-error" : "auth-notice"}
+          >
+            {feedback.text}
           </p>
         )}
         <button className="btn btn-primary" data-testid="auth-submit" disabled={busy}>
@@ -198,8 +197,7 @@ function AuthPanel({ onAuthed }: { onAuthed: (u: User) => void }) {
           data-testid="auth-toggle"
           onClick={() => {
             setMode(mode === "register" ? "login" : "register");
-            setError("");
-            setNotice("");
+            setFeedback(null);
           }}
         >
           {mode === "register" ? "I already have an account" : "Create a new account"}

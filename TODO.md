@@ -2,6 +2,15 @@
 
 Loose backlog of things worth doing. Not prioritized.
 
+## Infrastructure
+
+- [ ] **Real migration mechanism.** Schema changes now live in two places:
+  `migrations/schema.sql` (idempotent `CREATE … IF NOT EXISTS`, run by `Migrate`)
+  and imperative code (`store.EnsureUserEmail` — probe `table_info` → `ALTER` →
+  index → backfill). Fine for a one-off column add; it'll get fragile as changes
+  accumulate. Next schema change, introduce a lightweight versioned migration
+  table (`version INT, applied_at INTEGER`) and time-ordered migration steps.
+
 ## Auth / signup
 
 - [x] **Email on accounts + Resend + password reset.** Registration now requires
