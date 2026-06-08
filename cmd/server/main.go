@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/oriolj/openwifipassmap/internal/api"
+	"github.com/oriolj/openwifipassmap/internal/email"
 	"github.com/oriolj/openwifipassmap/internal/store"
 	"github.com/oriolj/openwifipassmap/internal/web"
 	"github.com/oriolj/openwifipassmap/migrations"
@@ -25,6 +26,12 @@ func main() {
 	dbPath := flag.String("db", env("DB_PATH", "data/wifispot.db"), "SQLite database path")
 	dev := flag.Bool("dev", env("DEV", "") != "", "enable permissive CORS for local frontend dev")
 	flag.Parse()
+
+	// Public origin used to build links in emails. Defaults to the local dev
+	// address; set PUBLIC_BASE_URL in prod (e.g. https://openwifipassmap.oriolj.com).
+	baseURL := env("PUBLIC_BASE_URL", "http://localhost:8080")
+	// Email backfill address for accounts that predate the email column.
+	backfillEmail := env("BACKFILL_EMAIL", "oriolj@gmail.com")
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
@@ -46,10 +53,17 @@ func main() {
 		log.Error("migration failed", "err", err)
 		os.Exit(1)
 	}
+	if err := st.EnsureUserEmail(ctx, backfillEmail); err != nil {
+		cancel()
+		log.Error("email migration failed", "err", err)
+		os.Exit(1)
+	}
 	cancel()
 
+	mailer := email.New(env("RESEND_API_KEY", ""), env("RESEND_FROM", ""), log)
+
 	mux := http.NewServeMux()
-	a := api.New(st, *dev, log)
+	a := api.New(st, *dev, log, mailer, baseURL)
 	a.Routes(mux)
 
 	webUI, err := web.New(st)

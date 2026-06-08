@@ -1,6 +1,8 @@
 import { test, expect } from "@playwright/test";
 
 const PASSWORD = "flatwhite123";
+// Email is required at registration but not unique, so tests can share one.
+const EMAIL = "barista@example.com";
 const BACKEND = process.env.BACKEND_URL ?? "http://localhost:8744";
 
 // One unique account per run so repeated runs don't collide on username.
@@ -16,6 +18,7 @@ test("React app: register → add spot → see it nearby → reveal password", a
 
   // Register (the auth panel defaults to register mode).
   await page.getByTestId("auth-username").fill(username);
+  await page.getByTestId("auth-email").fill(EMAIL);
   await page.getByTestId("auth-password").fill(PASSWORD);
   await page.getByTestId("auth-submit").click();
   await expect(page.getByTestId("user-badge")).toHaveText(username);
@@ -51,7 +54,7 @@ test("Public web: landing lists a nearby spot and the share page renders it", as
   // Seed an account + spot directly via the API (independent of the UI test).
   const username = uniqueUser();
   const reg = await request.post(`${BACKEND}/api/auth/register`, {
-    data: { username, password: PASSWORD },
+    data: { username, email: EMAIL, password: PASSWORD },
   });
   expect(reg.ok()).toBeTruthy();
   const token = (await reg.json()).token as string;
@@ -99,6 +102,7 @@ test("Public web: register → add a spot via the map pin → see it nearby + on
   await page.getByTestId("add-wifi").click();
   await expect(page.getByTestId("auth-modal")).toBeVisible();
   await page.getByTestId("auth-username").fill(username);
+  await page.getByTestId("auth-email").fill(EMAIL);
   await page.getByTestId("auth-password").fill(PASSWORD);
   await page.getByTestId("auth-register").click();
   await expect(page.getByTestId("account-button")).toContainText(username);
@@ -139,7 +143,7 @@ test("Confirmation flow: second user confirms a spot and it shows on share + nea
   // Owner creates the spot via API.
   const owner = uniqueUser();
   const ownerReg = await request.post(`${BACKEND}/api/auth/register`, {
-    data: { username: owner, password: PASSWORD },
+    data: { username: owner, email: EMAIL, password: PASSWORD },
   });
   const ownerToken = (await ownerReg.json()).token as string;
 
@@ -166,7 +170,7 @@ test("Confirmation flow: second user confirms a spot and it shows on share + nea
   // A second user confirms the spot (the legitimate path).
   const visitor = uniqueUser();
   const visitorReg = await request.post(`${BACKEND}/api/auth/register`, {
-    data: { username: visitor, password: PASSWORD },
+    data: { username: visitor, email: EMAIL, password: PASSWORD },
   });
   const visitorToken = (await visitorReg.json()).token as string;
 
@@ -200,7 +204,7 @@ test("Public web: malicious spot fields are rendered as text, not executed (XSS 
   await context.grantPermissions(["geolocation"]);
   const username = uniqueUser();
   const reg = await request.post(`${BACKEND}/api/auth/register`, {
-    data: { username, password: PASSWORD },
+    data: { username, email: EMAIL, password: PASSWORD },
   });
   const token = (await reg.json()).token as string;
 
@@ -221,4 +225,40 @@ test("Public web: malicious spot fields are rendered as text, not executed (XSS 
   const fired = await page.evaluate(() => (window as unknown as { __xssfired?: boolean }).__xssfired === true);
   expect(fired).toBe(false);
   await expect(page.getByText("PwnedCafe")).toBeVisible();
+});
+
+test("Password reset: email required to register, forgot is non-enumerating, bad token rejected", async ({
+  request,
+}) => {
+  const username = uniqueUser();
+
+  // Registration now requires a valid email.
+  const noEmail = await request.post(`${BACKEND}/api/auth/register`, {
+    data: { username, password: PASSWORD },
+  });
+  expect(noEmail.status()).toBe(400);
+
+  const withEmail = await request.post(`${BACKEND}/api/auth/register`, {
+    data: { username, email: EMAIL, password: PASSWORD },
+  });
+  expect(withEmail.status()).toBe(200);
+
+  // forgot-password returns the same generic 200 for a known and an unknown
+  // address — no way to probe which emails are registered.
+  for (const email of [EMAIL, `nobody-${username}@example.com`]) {
+    const res = await request.post(`${BACKEND}/api/auth/forgot-password`, { data: { email } });
+    expect(res.status()).toBe(200);
+    expect((await res.json()).message).toContain("reset link");
+  }
+
+  // A bogus token cannot set a password.
+  const bad = await request.post(`${BACKEND}/api/auth/reset-password`, {
+    data: { token: "not-a-real-token", password: "brandnewpw9" },
+  });
+  expect(bad.status()).toBe(400);
+
+  // The reset page renders for a magic link.
+  const page = await request.get(`${BACKEND}/reset?token=whatever`);
+  expect(page.ok()).toBeTruthy();
+  expect(await page.text()).toContain("Choose a new password");
 });

@@ -10,23 +10,29 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"html/template"
 	"log/slog"
 	"net/http"
+	"net/mail"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/oriolj/openwifipassmap/internal/auth"
+	"github.com/oriolj/openwifipassmap/internal/email"
 	"github.com/oriolj/openwifipassmap/internal/models"
 	"github.com/oriolj/openwifipassmap/internal/store"
 )
 
 const (
 	sessionTTL       = 30 * 24 * time.Hour
-	nearbyMaxRadius  = 50.0  // km — interactive
-	areaMaxRadius    = 300.0 // km — CLI bulk download
-	nearbyResultsCap = 200   // documented hard cap for the radius-bounded nearby list
-	areaPageSize     = 200   // cursor page size for area
+	passwordResetTTL = time.Hour // magic-link lifetime
+	nearbyMaxRadius  = 50.0      // km — interactive
+	areaMaxRadius    = 300.0     // km — CLI bulk download
+	nearbyResultsCap = 200       // documented hard cap for the radius-bounded nearby list
+	areaPageSize     = 200       // cursor page size for area
 )
 
 type ctxKey int
@@ -39,17 +45,31 @@ type API struct {
 	allowCORS bool
 	log       *slog.Logger
 	dummyHash string // verified against on unknown-user login to equalize timing
+	mailer    email.Sender
+	baseURL   string // public origin for links in emails, no trailing slash
 }
 
-// New returns an API. allowCORS enables permissive CORS for local dev.
-func New(s *store.Store, allowCORS bool, log *slog.Logger) *API {
+// New returns an API. allowCORS enables permissive CORS for local dev. mailer
+// sends transactional email (password resets); baseURL is the public origin
+// used to build links in those emails.
+func New(s *store.Store, allowCORS bool, log *slog.Logger, mailer email.Sender, baseURL string) *API {
 	if log == nil {
 		log = slog.Default()
+	}
+	if mailer == nil {
+		mailer = email.New("", "", log) // logging fallback
 	}
 	// Precompute a hash so the login path spends the same argon2 time whether or
 	// not the username exists (defeats username enumeration via timing).
 	dummy, _ := auth.HashPassword("timing-equalizer-not-a-real-password")
-	return &API{store: s, allowCORS: allowCORS, log: log, dummyHash: dummy}
+	return &API{
+		store:     s,
+		allowCORS: allowCORS,
+		log:       log,
+		dummyHash: dummy,
+		mailer:    mailer,
+		baseURL:   strings.TrimRight(baseURL, "/"),
+	}
 }
 
 // Routes registers the API routes on the given mux under /api/.
@@ -60,6 +80,8 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/auth/register", a.register)
 	mux.HandleFunc("POST /api/auth/login", a.login)
 	mux.HandleFunc("POST /api/auth/logout", h(a.logout))
+	mux.HandleFunc("POST /api/auth/forgot-password", a.forgotPassword)
+	mux.HandleFunc("POST /api/auth/reset-password", a.resetPassword)
 
 	mux.HandleFunc("GET /api/spots/nearby", a.nearby)
 	mux.HandleFunc("GET /api/spots/area", a.area)
@@ -140,6 +162,7 @@ func (a *API) health(w http.ResponseWriter, r *http.Request) {
 
 type authReq struct {
 	Username string `json:"username"`
+	Email    string `json:"email"`
 	Password string `json:"password"`
 }
 type authResp struct {
@@ -157,12 +180,17 @@ func (a *API) register(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "username must be ≥3 chars and password ≥8 chars")
 		return
 	}
+	addr, err := normalizeEmail(req.Email)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "a valid email address is required")
+		return
+	}
 	hash, err := auth.HashPassword(req.Password)
 	if err != nil {
 		a.serverErr(w, err)
 		return
 	}
-	u, err := a.store.CreateUser(r.Context(), req.Username, hash)
+	u, err := a.store.CreateUser(r.Context(), req.Username, addr, hash)
 	if errors.Is(err, store.ErrUsernameTaken) {
 		writeErr(w, http.StatusConflict, "username already taken")
 		return
@@ -172,6 +200,20 @@ func (a *API) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.issueToken(r.Context(), w, u)
+}
+
+// normalizeEmail validates and canonicalizes an email address. It returns the
+// trimmed address or an error if it isn't a syntactically valid single address.
+func normalizeEmail(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", errors.New("empty email")
+	}
+	addr, err := mail.ParseAddress(raw)
+	if err != nil {
+		return "", err
+	}
+	return addr.Address, nil
 }
 
 func (a *API) login(w http.ResponseWriter, r *http.Request) {
@@ -209,6 +251,102 @@ func (a *API) logout(w http.ResponseWriter, r *http.Request) {
 		_ = a.store.DeleteSession(r.Context(), token)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// forgotPassword issues a password-reset magic link for every account under the
+// submitted email. It always returns 200 with a generic message — never
+// revealing whether the address has an account — so it can't be used to
+// enumerate registered emails. Mail is sent asynchronously so a slow/ failing
+// SMTP provider can't stall or time the response.
+func (a *API) forgotPassword(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Email string `json:"email"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	const generic = "If that email has an account, a reset link is on its way."
+	addr, err := normalizeEmail(req.Email)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]string{"message": generic})
+		return
+	}
+	users, err := a.store.GetUsersByEmail(r.Context(), addr)
+	if err != nil {
+		a.serverErr(w, err)
+		return
+	}
+	for _, u := range users {
+		token, err := a.store.CreatePasswordResetToken(r.Context(), u.ID, passwordResetTTL)
+		if err != nil {
+			a.log.Error("create reset token", "err", err, "user", u.ID)
+			continue
+		}
+		link := a.baseURL + "/reset?token=" + url.QueryEscape(token)
+		a.sendResetEmail(addr, u.Username, link)
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"message": generic})
+}
+
+// sendResetEmail dispatches the magic-link email on a background goroutine so
+// the request returns immediately regardless of the mail provider's latency.
+func (a *API) sendResetEmail(to, username, link string) {
+	subject := "Reset your OpenWifiPassMap password"
+	text := fmt.Sprintf("Hi %s,\n\nWe got a request to reset your OpenWifiPassMap password. "+
+		"Open this link to choose a new one:\n\n%s\n\n"+
+		"This link expires in 1 hour. If you didn't ask for this, you can ignore this email.",
+		username, link)
+	html := fmt.Sprintf(`<p>Hi %s,</p>`+
+		`<p>We got a request to reset your OpenWifiPassMap password. `+
+		`Click the button below to choose a new one:</p>`+
+		`<p><a href="%s">Reset my password</a></p>`+
+		`<p>This link expires in 1 hour. If you didn't ask for this, you can ignore this email.</p>`,
+		template.HTMLEscapeString(username), template.HTMLEscapeString(link))
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := a.mailer.Send(ctx, to, subject, html, text); err != nil {
+			a.log.Error("send reset email", "err", err, "to", to)
+		}
+	}()
+}
+
+// resetPassword consumes a single-use reset token and sets a new password,
+// then revokes the user's existing sessions so any old/stolen token is dead.
+func (a *API) resetPassword(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Token    string `json:"token"`
+		Password string `json:"password"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if len(req.Password) < 8 {
+		writeErr(w, http.StatusBadRequest, "password must be ≥8 chars")
+		return
+	}
+	userID, err := a.store.ConsumePasswordResetToken(r.Context(), strings.TrimSpace(req.Token))
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusBadRequest, "this reset link is invalid or has expired")
+		return
+	}
+	if err != nil {
+		a.serverErr(w, err)
+		return
+	}
+	hash, err := auth.HashPassword(req.Password)
+	if err != nil {
+		a.serverErr(w, err)
+		return
+	}
+	if err := a.store.UpdateUserPassword(r.Context(), userID, hash); err != nil {
+		a.serverErr(w, err)
+		return
+	}
+	if err := a.store.DeleteUserSessions(r.Context(), userID); err != nil {
+		a.log.Error("revoke sessions after reset", "err", err, "user", userID)
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"message": "Password updated — you can now log in."})
 }
 
 func (a *API) nearby(w http.ResponseWriter, r *http.Request) {

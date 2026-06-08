@@ -4,11 +4,26 @@
 CREATE TABLE IF NOT EXISTS users (
     id            TEXT PRIMARY KEY,
     username      TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    email         TEXT NOT NULL DEFAULT '' COLLATE NOCASE,
     password_hash TEXT NOT NULL,
     is_admin      INTEGER NOT NULL DEFAULT 0,
     created_at    INTEGER NOT NULL,
     updated_at    INTEGER NOT NULL
 );
+-- Note: email is intentionally NOT UNIQUE — one person may own several accounts
+-- under one address, and the backfill of pre-email accounts deliberately shares
+-- a single address. Its index is created in store.EnsureUserEmail, after the
+-- column is guaranteed to exist (an existing DB only gains it via ALTER there).
+
+-- Single-use, time-limited tokens backing the password-reset magic links.
+-- Raw token in the row (same trust model as sessions); consumed by DELETE.
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    token      TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_prt_user ON password_reset_tokens(user_id);
 
 CREATE TABLE IF NOT EXISTS sessions (
     token      TEXT PRIMARY KEY,

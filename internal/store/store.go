@@ -61,6 +61,58 @@ func (s *Store) Migrate(ctx context.Context, schema string) error {
 	return err
 }
 
+// EnsureUserEmail brings a pre-existing database up to the email-bearing users
+// schema: it adds the users.email column when missing (SQLite has no
+// ADD COLUMN IF NOT EXISTS, so we probe table_info first) and backfills any
+// account that predates the column with the given address. Fresh databases
+// already have the column from schema.sql and only the (no-op) backfill runs.
+// Idempotent: safe to call on every boot.
+func (s *Store) EnsureUserEmail(ctx context.Context, backfill string) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(users)`)
+	if err != nil {
+		return err
+	}
+	hasEmail := false
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, typ string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == "email" {
+			hasEmail = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	if !hasEmail {
+		if _, err := s.db.ExecContext(ctx,
+			`ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT '' COLLATE NOCASE`); err != nil {
+			return err
+		}
+	}
+	// Index lives here (not schema.sql) so it's created only once the column is
+	// guaranteed present — schema.sql runs before this on a pre-email DB.
+	if _, err := s.db.ExecContext(ctx,
+		`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`); err != nil {
+		return err
+	}
+	if backfill != "" {
+		// Only blank emails — i.e. rows that existed before the column — are
+		// touched; real registrations always write a non-empty address.
+		if _, err := s.db.ExecContext(ctx,
+			`UPDATE users SET email = ?, updated_at = ? WHERE email = ''`, backfill, nowMS()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func nowMS() int64 { return time.Now().UnixMilli() }
 
 // ---- Users ----
@@ -68,19 +120,39 @@ func nowMS() int64 { return time.Now().UnixMilli() }
 // ErrUsernameTaken is returned when a username already exists.
 var ErrUsernameTaken = errors.New("store: username already taken")
 
-// CreateUser inserts a new user. passwordHash must already be hashed.
-func (s *Store) CreateUser(ctx context.Context, username, passwordHash string) (*models.User, error) {
+// userColumns is the canonical SELECT column order for a user row, kept in
+// lock-step with scanUserRow.
+const userColumns = `id, username, email, password_hash, is_admin, created_at, updated_at`
+
+// scanUserRow reads one user row in userColumns order, translating
+// sql.ErrNoRows to ErrNotFound. Works for both *sql.Row and *sql.Rows.
+func scanUserRow(sc models.Scanner) (*models.User, error) {
+	var u models.User
+	err := sc.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.IsAdmin, &u.CreatedAt, &u.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+// CreateUser inserts a new user. passwordHash must already be hashed; email may
+// be empty only for legacy/internal callers (the API requires a valid address).
+func (s *Store) CreateUser(ctx context.Context, username, email, passwordHash string) (*models.User, error) {
 	u := &models.User{
 		ID:           models.NewID(),
 		Username:     username,
+		Email:        email,
 		PasswordHash: passwordHash,
 		CreatedAt:    nowMS(),
 	}
 	u.UpdatedAt = u.CreatedAt
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO users (id, username, password_hash, is_admin, created_at, updated_at)
-		 VALUES (?, ?, ?, 0, ?, ?)`,
-		u.ID, u.Username, u.PasswordHash, u.CreatedAt, u.UpdatedAt)
+		`INSERT INTO users (id, username, email, password_hash, is_admin, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, 0, ?, ?)`,
+		u.ID, u.Username, u.Email, u.PasswordHash, u.CreatedAt, u.UpdatedAt)
 	if err != nil {
 		// Only a UNIQUE violation means the username is taken; surface every
 		// other error (locked DB, disk full, …) as itself so it isn't masked
@@ -95,28 +167,49 @@ func (s *Store) CreateUser(ctx context.Context, username, passwordHash string) (
 
 // GetUserByUsername looks up a user by (case-insensitive) username.
 func (s *Store) GetUserByUsername(ctx context.Context, username string) (*models.User, error) {
-	return s.scanUser(s.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, is_admin, created_at, updated_at
-		 FROM users WHERE username = ? COLLATE NOCASE`, username))
+	return scanUserRow(s.db.QueryRowContext(ctx,
+		`SELECT `+userColumns+` FROM users WHERE username = ? COLLATE NOCASE`, username))
 }
 
 // GetUserByID looks up a user by id.
 func (s *Store) GetUserByID(ctx context.Context, id string) (*models.User, error) {
-	return s.scanUser(s.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, is_admin, created_at, updated_at
-		 FROM users WHERE id = ?`, id))
+	return scanUserRow(s.db.QueryRowContext(ctx,
+		`SELECT `+userColumns+` FROM users WHERE id = ?`, id))
 }
 
-func (s *Store) scanUser(row *sql.Row) (*models.User, error) {
-	var u models.User
-	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.IsAdmin, &u.CreatedAt, &u.UpdatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNotFound
-	}
+// GetUsersByEmail returns every account registered under email (case-insensitive).
+// Email is intentionally not unique, so this can return more than one user; the
+// forgot-password flow issues a reset link for each.
+func (s *Store) GetUsersByEmail(ctx context.Context, email string) ([]*models.User, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+userColumns+` FROM users WHERE email = ? COLLATE NOCASE ORDER BY created_at`, email)
 	if err != nil {
 		return nil, err
 	}
-	return &u, nil
+	defer rows.Close()
+	var out []*models.User
+	for rows.Next() {
+		u, err := scanUserRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// UpdateUserPassword replaces a user's password hash (used by password reset).
+func (s *Store) UpdateUserPassword(ctx context.Context, userID, passwordHash string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?`,
+		passwordHash, nowMS(), userID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // ---- Sessions ----
@@ -140,25 +233,56 @@ func (s *Store) CreateSession(ctx context.Context, userID string, ttl time.Durat
 
 // UserForToken returns the user owning a non-expired session token.
 func (s *Store) UserForToken(ctx context.Context, token string) (*models.User, error) {
-	var u models.User
-	err := s.db.QueryRowContext(ctx,
-		`SELECT u.id, u.username, u.password_hash, u.is_admin, u.created_at, u.updated_at
+	return scanUserRow(s.db.QueryRowContext(ctx,
+		`SELECT u.id, u.username, u.email, u.password_hash, u.is_admin, u.created_at, u.updated_at
 		 FROM sessions s JOIN users u ON u.id = s.user_id
-		 WHERE s.token = ? AND s.expires_at > ?`, token, nowMS()).
-		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.IsAdmin, &u.CreatedAt, &u.UpdatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &u, nil
+		 WHERE s.token = ? AND s.expires_at > ?`, token, nowMS()))
 }
 
 // DeleteSession removes a session token (logout).
 func (s *Store) DeleteSession(ctx context.Context, token string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE token = ?`, token)
 	return err
+}
+
+// DeleteUserSessions revokes every session for a user (used after a password
+// reset so any stolen/old token stops working).
+func (s *Store) DeleteUserSessions(ctx context.Context, userID string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ?`, userID)
+	return err
+}
+
+// ---- Password reset tokens ----
+
+// CreatePasswordResetToken issues a single-use reset token for userID, valid
+// for ttl. Returns the raw token to embed in the magic link.
+func (s *Store) CreatePasswordResetToken(ctx context.Context, userID string, ttl time.Duration) (string, error) {
+	token := models.NewToken()
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO password_reset_tokens (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)`,
+		token, userID, nowMS(), time.Now().Add(ttl).UnixMilli())
+	if err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+// ConsumePasswordResetToken atomically validates and burns a reset token,
+// returning the user it belongs to. The DELETE ... RETURNING makes use
+// single-shot even under concurrent submits. Returns ErrNotFound when the
+// token is unknown or expired.
+func (s *Store) ConsumePasswordResetToken(ctx context.Context, token string) (string, error) {
+	var userID string
+	err := s.db.QueryRowContext(ctx,
+		`DELETE FROM password_reset_tokens WHERE token = ? AND expires_at > ? RETURNING user_id`,
+		token, nowMS()).Scan(&userID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	return userID, nil
 }
 
 // ---- Spots ----

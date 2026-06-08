@@ -7,7 +7,7 @@ const BACKEND = process.env.BACKEND_URL ?? "http://localhost:8744";
 test("capture screenshots", async ({ page, request }) => {
   const username = `shot_${Date.now().toString(36)}`;
   const reg = await request.post(`${BACKEND}/api/auth/register`, {
-    data: { username, password: "flatwhite123" },
+    data: { username, email: "shots@example.com", password: "flatwhite123" },
   });
   const token = (await reg.json()).token as string;
 

@@ -4,6 +4,7 @@ import {
   type User,
   confirmSpot,
   createSpot,
+  forgotPassword,
   getStoredUser,
   login,
   logout,
@@ -100,17 +101,38 @@ export function App() {
 function AuthPanel({ onAuthed }: { onAuthed: (u: User) => void }) {
   const [mode, setMode] = useState<"login" | "register">("register");
   const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
+    setNotice("");
     setBusy(true);
     try {
-      const u = mode === "register" ? await register(username, password) : await login(username, password);
+      const u =
+        mode === "register" ? await register(username, email, password) : await login(username, password);
       onAuthed(u);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function forgot() {
+    setError("");
+    setNotice("");
+    if (!email.trim()) {
+      setError("Enter your email above, then tap “Forgot password?”.");
+      return;
+    }
+    setBusy(true);
+    try {
+      setNotice(await forgotPassword(email));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
@@ -133,6 +155,14 @@ function AuthPanel({ onAuthed }: { onAuthed: (u: User) => void }) {
         />
         <input
           className="input input-bordered"
+          type="email"
+          placeholder={mode === "register" ? "Email" : "Email (for password reset)"}
+          data-testid="auth-email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
+        <input
+          className="input input-bordered"
           type="password"
           placeholder="Password (≥8 chars)"
           data-testid="auth-password"
@@ -144,9 +174,24 @@ function AuthPanel({ onAuthed }: { onAuthed: (u: User) => void }) {
             {error}
           </p>
         )}
+        {notice && (
+          <p className="text-success text-sm" data-testid="auth-notice">
+            {notice}
+          </p>
+        )}
         <button className="btn btn-primary" data-testid="auth-submit" disabled={busy}>
           {busy ? "…" : mode === "register" ? "Sign up" : "Log in"}
         </button>
+        {mode === "login" && (
+          <button
+            type="button"
+            className="btn btn-link btn-sm"
+            data-testid="auth-forgot"
+            onClick={forgot}
+          >
+            Forgot password?
+          </button>
+        )}
         <button
           type="button"
           className="btn btn-link btn-sm"
@@ -154,6 +199,7 @@ function AuthPanel({ onAuthed }: { onAuthed: (u: User) => void }) {
           onClick={() => {
             setMode(mode === "register" ? "login" : "register");
             setError("");
+            setNotice("");
           }}
         >
           {mode === "register" ? "I already have an account" : "Create a new account"}

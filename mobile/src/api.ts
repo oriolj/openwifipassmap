@@ -21,6 +21,7 @@ const USER_KEY = "openwifipassmap.user";
 export interface User {
   id: string;
   username: string;
+  email?: string;
   is_admin: boolean;
 }
 
@@ -113,13 +114,21 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return body as T;
 }
 
-export async function register(username: string, password: string): Promise<User> {
+export async function register(username: string, email: string, password: string): Promise<User> {
   const r = await request<{ token: string; user: User }>("/api/auth/register", {
     method: "POST",
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ username, email, password }),
   });
   setAuth(r.token, r.user);
   return r.user;
+}
+
+export async function forgotPassword(email: string): Promise<string> {
+  const r = await request<{ message: string }>("/api/auth/forgot-password", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+  return r.message;
 }
 
 export async function login(username: string, password: string): Promise<User> {

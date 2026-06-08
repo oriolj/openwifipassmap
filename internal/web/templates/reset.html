@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="emerald">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Reset your password — OpenWifiPassMap</title>
+  <meta name="robots" content="noindex" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@4/dist/full.min.css" rel="stylesheet" type="text/css" />
+</head>
+<body class="bg-base-200 min-h-screen flex flex-col">
+  <header class="navbar bg-base-100 shadow-sm">
+    <a href="/" class="flex-1 px-4 text-xl font-bold">📶 OpenWifiPassMap</a>
+  </header>
+
+  <main class="flex-1 flex items-center justify-center p-4">
+    <div class="card bg-base-100 shadow-md w-full max-w-sm">
+      <div class="card-body">
+        <h1 class="card-title">Choose a new password</h1>
+        <!-- Token comes from the magic link's ?token=… ; html/template escapes it. -->
+        <input type="hidden" id="reset-token" value="{{.Token}}" />
+        <form id="reset-form" class="space-y-2">
+          <input id="password" data-testid="reset-password" type="password" autocomplete="new-password"
+                 class="input input-bordered w-full" placeholder="New password (≥8 chars)" required />
+          <input id="confirm" data-testid="reset-confirm" type="password" autocomplete="new-password"
+                 class="input input-bordered w-full" placeholder="Confirm new password" required />
+          <p id="error" data-testid="reset-error" class="text-error text-sm hidden"></p>
+          <button type="submit" data-testid="reset-submit" class="btn btn-primary w-full">Update password</button>
+        </form>
+        <div id="done" data-testid="reset-done" class="hidden">
+          <div class="alert alert-success text-sm">Password updated — you can now log in.</div>
+          <a href="/" class="btn btn-outline btn-sm w-full mt-2">Back to the map</a>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+  (function () {
+    const form = document.getElementById('reset-form');
+    const errorEl = document.getElementById('error');
+    const token = document.getElementById('reset-token').value;
+
+    function showError(msg) {
+      errorEl.textContent = msg;
+      errorEl.classList.remove('hidden');
+    }
+
+    if (!token) {
+      showError('This reset link is missing its token. Request a new one from the login screen.');
+      form.querySelector('button[type=submit]').disabled = true;
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errorEl.classList.add('hidden');
+      const password = document.getElementById('password').value;
+      const confirm = document.getElementById('confirm').value;
+      if (password.length < 8) { showError('Password must be at least 8 characters.'); return; }
+      if (password !== confirm) { showError('Passwords do not match.'); return; }
+      try {
+        const res = await fetch('/api/auth/reset-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token, password }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || ('server returned ' + res.status));
+        form.classList.add('hidden');
+        document.getElementById('done').classList.remove('hidden');
+      } catch (err) {
+        showError(err.message);
+      }
+    });
+  })();
+  </script>
+</body>
+</html>

@@ -14,6 +14,7 @@ import (
 type User struct {
 	ID           string `json:"id"`
 	Username     string `json:"username"`
+	Email        string `json:"email"`
 	PasswordHash string `json:"-"`
 	IsAdmin      bool   `json:"is_admin"`
 	CreatedAt    int64  `json:"created_at"`

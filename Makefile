@@ -27,10 +27,14 @@ help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-18s$(NC) %s\n", $$1, $$2}'
 
+# Load local secrets/config (RESEND_API_KEY, PUBLIC_BASE_URL, …) if present.
+# .env.local is gitignored; missing file is fine.
+LOAD_ENV := if [ -f .env.local ]; then set -a; . ./.env.local; set +a; fi
+
 start: ## Run backend + mobile dev server (mobile → local backend)
 	@echo -e "$(GREEN)Starting backend (:$(PORT)) + mobile dev (:5173)$(NC)"
 	@trap 'kill 0' EXIT; \
-		( ADDR=:$(PORT) DEV=1 go run ./cmd/server ) & \
+		( $(LOAD_ENV); ADDR=:$(PORT) DEV=1 go run ./cmd/server ) & \
 		( cd mobile && VITE_API_BASE=$(API_BASE) npm run dev ) & \
 		wait
 
@@ -41,7 +45,7 @@ start-remote: ## Run mobile dev server pointed at the remote/prod backend
 	@cd mobile && VITE_API_BASE=$(REMOTE_API) npm run dev
 
 server: ## Run the Go backend only (API + public web)
-	@ADDR=:$(PORT) DEV=1 go run ./cmd/server
+	@$(LOAD_ENV); ADDR=:$(PORT) DEV=1 go run ./cmd/server
 
 mobile: ## Run the Vite/React mobile dev server only
 	@cd mobile && VITE_API_BASE=$(API_BASE) npm run dev

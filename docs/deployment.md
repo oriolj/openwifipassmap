@@ -24,6 +24,13 @@ make docker-build      # docker build -f docker/Dockerfile -t openwifipassmap:la
    before deploying, this is a footgun.
 4. **Env vars** (mark secrets *runtime-only*):
    - `ADDR=:8080`, `DB_PATH=/data/wifispot.db`
+   - `PUBLIC_BASE_URL=https://openwifipassmap.oriolj.com` — origin used to build
+     links in emails (password-reset magic links). Defaults to `http://localhost:8080`.
+   - `RESEND_API_KEY` (**runtime-only secret**) — enables real email; when unset
+     the server logs the email instead of sending it.
+   - `RESEND_FROM` — optional sender; defaults to `no-reply@oriolj.com`.
+   - `BACKFILL_EMAIL` — address stamped onto any pre-email account on first boot
+     after the email migration; defaults to `oriolj@gmail.com`.
    - Litestream: `LITESTREAM_ACCESS_KEY_ID`, `LITESTREAM_SECRET_ACCESS_KEY`,
      `REPLICA_BUCKET`, `REPLICA_ENDPOINT`
 5. App listens on `0.0.0.0` (it does — `ADDR=:8080`), required for Traefik.

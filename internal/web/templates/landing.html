@@ -50,9 +50,13 @@
       <form id="auth-form" class="space-y-2">
         <input id="auth-username" data-testid="auth-username" name="username" autocomplete="username"
                class="input input-bordered w-full" placeholder="Username" />
+        <input id="auth-email" data-testid="auth-email" name="email" type="email" autocomplete="email"
+               class="input input-bordered w-full" placeholder="Email (required to sign up)" />
         <input id="auth-password" data-testid="auth-password" name="password" type="password"
                autocomplete="current-password" class="input input-bordered w-full" placeholder="Password" />
         <p id="auth-error" data-testid="auth-error" class="text-error text-sm hidden"></p>
+        <button type="button" id="auth-forgot" data-testid="auth-forgot"
+                class="btn btn-link btn-xs px-0 -mt-1">Forgot password?</button>
         <div class="modal-action">
           <button type="button" id="auth-cancel" class="btn btn-ghost btn-sm">Cancel</button>
           <button type="button" id="auth-register" data-testid="auth-register" class="btn btn-outline btn-sm">Register</button>
@@ -357,12 +361,15 @@
       async function submitAuth(kind) {
         authError.classList.add('hidden');
         const username = document.getElementById('auth-username').value.trim();
+        const email = document.getElementById('auth-email').value.trim();
         const password = document.getElementById('auth-password').value;
+        // Email is only sent (and required) when registering; login ignores it.
+        const payload = kind === 'register' ? { username, email, password } : { username, password };
         try {
           const res = await fetch('/api/auth/' + kind, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, password }),
+            body: JSON.stringify(payload),
           });
           const data = await res.json().catch(() => ({}));
           if (!res.ok) throw new Error(data.error || ('server returned ' + res.status));
@@ -397,6 +404,33 @@
       document.getElementById('auth-register').addEventListener('click', () => submitAuth('register'));
       authForm.addEventListener('submit', (e) => { e.preventDefault(); submitAuth('login'); });
       document.getElementById('auth-cancel').addEventListener('click', () => authModal.close());
+      document.getElementById('auth-forgot').addEventListener('click', submitForgot);
+
+      // Forgot password: email the address in the form a reset magic link. The
+      // server always answers 200 with a generic message (no account-enumeration).
+      async function submitForgot() {
+        authError.classList.add('hidden');
+        const email = document.getElementById('auth-email').value.trim();
+        if (!email) {
+          authError.textContent = 'Enter your email above first, then tap “Forgot password?”.';
+          authError.classList.remove('hidden');
+          return;
+        }
+        try {
+          const res = await fetch('/api/auth/forgot-password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || ('server returned ' + res.status));
+          authModal.close();
+          showToast(data.message || 'If that email has an account, a reset link is on its way.');
+        } catch (err) {
+          authError.textContent = err.message;
+          authError.classList.remove('hidden');
+        }
+      }
 
       // --- Placement: drop a draggable pin so the user sets the location ---
       let placingMarker = null;

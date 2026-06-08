@@ -61,10 +61,18 @@ func humanizeAgo(ms *int64) string {
 func (web *Web) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /{$}", web.landing) // exact "/" only
 	mux.HandleFunc("GET /s/{id}", web.share)
+	mux.HandleFunc("GET /reset", web.reset)
 }
 
 func (web *Web) landing(w http.ResponseWriter, r *http.Request) {
 	web.render(w, "landing.html", nil)
+}
+
+// reset renders the password-reset page for a magic link. The token from the
+// query string is passed through to the template (which POSTs it back to
+// /api/auth/reset-password along with the new password).
+func (web *Web) reset(w http.ResponseWriter, r *http.Request) {
+	web.render(w, "reset.html", struct{ Token string }{Token: r.URL.Query().Get("token")})
 }
 
 func (web *Web) share(w http.ResponseWriter, r *http.Request) {
