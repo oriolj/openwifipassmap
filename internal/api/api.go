@@ -276,16 +276,39 @@ func (a *API) forgotPassword(w http.ResponseWriter, r *http.Request) {
 		a.serverErr(w, err)
 		return
 	}
+	base := a.publicBase(r)
 	for _, u := range users {
 		token, err := a.store.CreatePasswordResetToken(r.Context(), u.ID, passwordResetTTL)
 		if err != nil {
 			a.log.Error("create reset token", "err", err, "user", u.ID)
 			continue
 		}
-		link := a.baseURL + "/reset?token=" + url.QueryEscape(token)
+		link := base + "/reset?token=" + url.QueryEscape(token)
 		a.sendResetEmail(addr, u.Username, link)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": generic})
+}
+
+// publicBase returns the origin to use for links in emails. A configured
+// baseURL (PUBLIC_BASE_URL) is authoritative; otherwise it's derived from the
+// incoming request so links use whatever host the user actually hit — including
+// behind a TLS-terminating proxy like Coolify's Traefik (X-Forwarded-Proto/Host).
+// Set PUBLIC_BASE_URL in prod to be immune to Host-header spoofing.
+func (a *API) publicBase(r *http.Request) string {
+	if a.baseURL != "" {
+		return a.baseURL
+	}
+	scheme := "http"
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+		scheme = proto
+	} else if r.TLS != nil {
+		scheme = "https"
+	}
+	host := r.Host
+	if fwd := r.Header.Get("X-Forwarded-Host"); fwd != "" {
+		host = fwd
+	}
+	return scheme + "://" + host
 }
 
 // sendResetEmail dispatches the magic-link email on a background goroutine so

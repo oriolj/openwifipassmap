@@ -27,9 +27,11 @@ func main() {
 	dev := flag.Bool("dev", env("DEV", "") != "", "enable permissive CORS for local frontend dev")
 	flag.Parse()
 
-	// Public origin used to build links in emails. Defaults to the local dev
-	// address; set PUBLIC_BASE_URL in prod (e.g. https://openwifipassmap.oriolj.com).
-	baseURL := env("PUBLIC_BASE_URL", "http://localhost:8080")
+	// Public origin used to build links in emails. When unset, the API derives
+	// it from each request (honoring the proxy's X-Forwarded-* headers), so
+	// links use the real host. Set PUBLIC_BASE_URL in prod to pin it explicitly
+	// (e.g. https://openwifipassmap.oriolj.com) and be immune to Host spoofing.
+	baseURL := env("PUBLIC_BASE_URL", "")
 	// Email backfill address for accounts that predate the email column.
 	backfillEmail := env("BACKFILL_EMAIL", "oriolj@gmail.com")
 

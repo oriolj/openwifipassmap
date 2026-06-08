@@ -25,7 +25,10 @@ make docker-build      # docker build -f docker/Dockerfile -t openwifipassmap:la
 4. **Env vars** (mark secrets *runtime-only*):
    - `ADDR=:8080`, `DB_PATH=/data/wifispot.db`
    - `PUBLIC_BASE_URL=https://openwifipassmap.oriolj.com` — origin used to build
-     links in emails (password-reset magic links). Defaults to `http://localhost:8080`.
+     links in emails (password-reset magic links). When unset the server derives
+     it per-request from the proxy's `X-Forwarded-Proto`/`X-Forwarded-Host`, so
+     links already use the real host; set it explicitly to pin the origin and be
+     immune to Host-header spoofing.
    - `RESEND_API_KEY` (**runtime-only secret**) — enables real email; when unset
      the server logs the email instead of sending it.
    - `RESEND_FROM` — optional sender; defaults to `no-reply@oriolj.com`.
