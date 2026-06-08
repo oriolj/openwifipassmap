@@ -1,0 +1,42 @@
+# Build context excludes for `docker build` (context = repo root).
+# The image only needs Go sources + go.mod/sum (the server build embeds
+# templates and migrations); keep secrets, local data, and the frontend out.
+
+# VCS
+.git
+.gitignore
+
+# Secrets / local env — must never enter a build layer
+.env
+.env.local
+
+# Local SQLite data (never bake a dev DB into the image)
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# Go build outputs / test artifacts
+bin/
+*.test
+*.out
+
+# Frontend + e2e — not used to build the Go server
+mobile/node_modules/
+mobile/dist/
+mobile/.vite/
+mobile/ios/
+mobile/android/
+e2e/node_modules/
+e2e/test-results/
+e2e/screenshots/
+e2e/playwright-report/
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
