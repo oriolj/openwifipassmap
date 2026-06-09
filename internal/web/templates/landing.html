@@ -325,6 +325,20 @@
         setTimeout(() => toastEl.classList.add('hidden'), 3000);
       }
 
+      // Fill the account menu's "N WiFis added" line from /api/me (a real count,
+      // not derived from the in-view list). Best-effort: stays "…" on failure.
+      async function refreshMyStats() {
+        const token = getToken();
+        if (!token) return;
+        try {
+          const res = await fetch('/api/me', { headers: { 'Authorization': 'Bearer ' + token } });
+          if (!res.ok) return;
+          const data = await res.json();
+          const elc = document.getElementById('my-spot-count');
+          if (elc) elc.textContent = data.spots_added + (data.spots_added === 1 ? ' WiFi added' : ' WiFis added');
+        } catch (_) { /* leave the placeholder */ }
+      }
+
       function renderAccount() {
         accountEl.replaceChildren();
         const user = getUsername();
@@ -333,8 +347,15 @@
           const btn = el('button', 'btn btn-sm btn-ghost', '👤 ' + user);
           btn.dataset.testid = 'account-button';
           btn.setAttribute('tabindex', '0');
-          const menu = el('ul', 'dropdown-content menu bg-base-100 rounded-box shadow z-[1000] w-32 p-2');
+          const menu = el('ul', 'dropdown-content menu bg-base-100 rounded-box shadow z-[1000] w-44 p-2');
           menu.setAttribute('tabindex', '0');
+          // Count of WiFis this user added (filled in async by refreshMyStats).
+          const statLi = el('li', 'menu-title');
+          const stat = el('span', 'text-xs', '… WiFis added');
+          stat.id = 'my-spot-count';
+          stat.dataset.testid = 'my-spot-count';
+          statLi.appendChild(stat);
+          menu.appendChild(statLi);
           const li = el('li');
           const logout = el('a', null, 'Log out');
           logout.dataset.testid = 'logout';
@@ -344,6 +365,7 @@
           wrap.appendChild(btn);
           wrap.appendChild(menu);
           accountEl.appendChild(wrap);
+          refreshMyStats();
         } else {
           const btn = el('button', 'btn btn-sm btn-ghost', 'Log in');
           btn.dataset.testid = 'login-button';
@@ -515,6 +537,7 @@
           endPlacement();
           showToast('WiFi spot added — thanks!');
           loadSpots();
+          refreshMyStats();
         } catch (err) {
           addError.textContent = err.message;
           addError.classList.remove('hidden');

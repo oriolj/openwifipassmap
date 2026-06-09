@@ -354,6 +354,14 @@ func (s *Store) UpdateSpot(ctx context.Context, sp *models.Spot) error {
 	return nil
 }
 
+// CountSpotsByUser returns how many spots a user has contributed. Backed by
+// idx_spots_created_by, so it's a cheap index scan, not a table scan.
+func (s *Store) CountSpotsByUser(ctx context.Context, userID string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM spots WHERE created_by = ?`, userID).Scan(&n)
+	return n, err
+}
+
 // DeleteSpot removes a spot by id.
 func (s *Store) DeleteSpot(ctx context.Context, id string) error {
 	res, err := s.db.ExecContext(ctx, `DELETE FROM spots WHERE id = ?`, id)

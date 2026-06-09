@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   type Spot,
   type User,
   confirmSpot,
   createSpot,
   forgotPassword,
+  getMe,
   getStoredUser,
   login,
   logout,
@@ -28,6 +29,22 @@ type View = "nearby" | "add";
 export function App() {
   const [user, setUser] = useState<User | null>(getStoredUser());
   const [view, setView] = useState<View>("nearby");
+  const [spotsAdded, setSpotsAdded] = useState<number | null>(null);
+
+  // How many spots the logged-in user has contributed (from /api/me, not a
+  // list length). Refreshed on login and after each successful add.
+  const refreshMe = useCallback(() => {
+    getMe()
+      .then((me) => setSpotsAdded(me.spots_added))
+      .catch(() => {
+        /* non-fatal: just leave the count hidden */
+      });
+  }, []);
+
+  useEffect(() => {
+    if (user) refreshMe();
+    else setSpotsAdded(null);
+  }, [user, refreshMe]);
 
   // Auto-logout when any API call reports the session is no longer valid.
   useEffect(() => {
@@ -49,6 +66,11 @@ export function App() {
               <span className="badge badge-primary" data-testid="user-badge">
                 {user.username}
               </span>
+              {spotsAdded != null && (
+                <span className="text-sm opacity-70" data-testid="spots-added">
+                  {spotsAdded} {spotsAdded === 1 ? "WiFi" : "WiFis"} added
+                </span>
+              )}
               <button
                 className="btn btn-sm btn-ghost"
                 data-testid="logout-btn"
@@ -87,7 +109,7 @@ export function App() {
       <main className="flex-1 p-3 max-w-xl w-full mx-auto">
         {!user && <AuthPanel onAuthed={setUser} />}
         {view === "nearby" && <NearbyView user={user} />}
-        {view === "add" && user && <AddSpotView />}
+        {view === "add" && user && <AddSpotView onAdded={refreshMe} />}
         {view === "add" && !user && (
           <p className="alert alert-info mt-3" data-testid="login-required">
             Log in above to add a spot.
@@ -356,7 +378,7 @@ function SpotCard({
   );
 }
 
-function AddSpotView() {
+function AddSpotView({ onAdded }: { onAdded: () => void }) {
   const [venue, setVenue] = useState("");
   const [essid, setEssid] = useState("");
   const [password, setPassword] = useState("");
@@ -385,6 +407,7 @@ function AddSpotView() {
       setEssid("");
       setPassword("");
       setNotes("");
+      onAdded();
     } catch (err) {
       setStatus(err instanceof Error ? err.message : "Could not save spot");
     } finally {

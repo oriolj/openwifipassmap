@@ -82,6 +82,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/auth/logout", h(a.logout))
 	mux.HandleFunc("POST /api/auth/forgot-password", a.forgotPassword)
 	mux.HandleFunc("POST /api/auth/reset-password", a.resetPassword)
+	mux.HandleFunc("GET /api/me", h(a.me))
 
 	mux.HandleFunc("GET /api/spots/nearby", a.nearby)
 	mux.HandleFunc("GET /api/spots/area", a.area)
@@ -251,6 +252,21 @@ func (a *API) logout(w http.ResponseWriter, r *http.Request) {
 		_ = a.store.DeleteSession(r.Context(), token)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// me returns the authenticated user plus lightweight account stats (how many
+// spots they've contributed). Also serves as the "who am I" lookup.
+func (a *API) me(w http.ResponseWriter, r *http.Request) {
+	u, ok := a.requireUser(w, r)
+	if !ok {
+		return
+	}
+	n, err := a.store.CountSpotsByUser(r.Context(), u.ID)
+	if err != nil {
+		a.serverErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"user": u, "spots_added": n})
 }
 
 // forgotPassword issues a password-reset magic link for every account under the

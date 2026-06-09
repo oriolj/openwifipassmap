@@ -32,6 +32,9 @@ test("React app: register → add spot → see it nearby → reveal password", a
   await page.getByTestId("add-submit").click();
   await expect(page.getByTestId("add-status")).toContainText("Saved");
 
+  // The header's contribution count (from /api/me) reflects the new spot.
+  await expect(page.getByTestId("spots-added")).toContainText("1 WiFi added");
+
   // See it in the nearby list. Scope to THIS spot's card — other spots can tie
   // at distance 0 (same coordinates), so `.first()` would be ambiguous.
   await page.getByTestId("nearby-tab").click();
@@ -73,6 +76,15 @@ test("Public web: landing lists a nearby spot and the share page renders it", as
   });
   expect(create.status()).toBe(201);
   const spotId = (await create.json()).id as string;
+
+  // /api/me reports the contribution count (from a real query, not list length).
+  const me = await request.get(`${BACKEND}/api/me`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect(me.ok()).toBeTruthy();
+  const meJson = await me.json();
+  expect(meJson.spots_added).toBe(1);
+  expect(meJson.user.username).toBe(username);
 
   // Landing page: click "find nearby" and expect at least one spot to appear.
   await page.goto(`${BACKEND}/`);
@@ -124,6 +136,10 @@ test("Public web: register → add a spot via the map pin → see it nearby + on
   // It reloads into the in-view list. Scope to this venue's card.
   const card = page.getByTestId("spot").filter({ hasText: "Web Café" });
   await expect(card).toBeVisible({ timeout: 10_000 });
+
+  // The account menu surfaces the contribution count.
+  await page.getByTestId("account-button").click();
+  await expect(page.getByTestId("my-spot-count")).toContainText("1 WiFi added");
 
   // And the credentials render on its shareable page.
   const link = card.getByRole("link", { name: "View & share" });

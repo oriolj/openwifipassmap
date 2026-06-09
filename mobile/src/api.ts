@@ -123,6 +123,10 @@ export async function register(username: string, email: string, password: string
   return r.user;
 }
 
+export async function getMe(): Promise<{ user: User; spots_added: number }> {
+  return request<{ user: User; spots_added: number }>("/api/me");
+}
+
 export async function forgotPassword(email: string): Promise<string> {
   const r = await request<{ message: string }>("/api/auth/forgot-password", {
     method: "POST",
