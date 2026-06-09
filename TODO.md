@@ -2,6 +2,14 @@
 
 Loose backlog of things worth doing. Not prioritized.
 
+## Before launch
+
+- [ ] **Add Plausible analytics tracking before launching.** Wire up
+  privacy-friendly analytics (Plausible) on the public web (landing + share
+  pages) so we have visibility into traffic from day one. Self-host as its own
+  Coolify resource (not co-deployed with the app). Add the script to the
+  server-rendered templates; respect Do-Not-Track.
+
 ## Infrastructure
 
 - [ ] **Real migration mechanism.** Schema changes now live in two places:
