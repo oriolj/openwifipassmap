@@ -61,18 +61,16 @@ func (s *Store) Migrate(ctx context.Context, schema string) error {
 	return err
 }
 
-// EnsureUserEmail brings a pre-existing database up to the email-bearing users
-// schema: it adds the users.email column when missing (SQLite has no
-// ADD COLUMN IF NOT EXISTS, so we probe table_info first) and backfills any
-// account that predates the column with the given address. Fresh databases
-// already have the column from schema.sql and only the (no-op) backfill runs.
-// Idempotent: safe to call on every boot.
-func (s *Store) EnsureUserEmail(ctx context.Context, backfill string) error {
-	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(users)`)
+// ensureColumn adds a column to a table via ALTER when it's missing — SQLite
+// has no ADD COLUMN IF NOT EXISTS, so it probes table_info first. columnDDL is
+// the full column definition (e.g. "email TEXT NOT NULL DEFAULT ”"). table and
+// column are caller-supplied literals, never user input. Idempotent.
+func (s *Store) ensureColumn(ctx context.Context, table, column, columnDDL string) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
 	if err != nil {
 		return err
 	}
-	hasEmail := false
+	has := false
 	for rows.Next() {
 		var cid, notnull, pk int
 		var name, typ string
@@ -81,8 +79,8 @@ func (s *Store) EnsureUserEmail(ctx context.Context, backfill string) error {
 			rows.Close()
 			return err
 		}
-		if name == "email" {
-			hasEmail = true
+		if name == column {
+			has = true
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -90,11 +88,21 @@ func (s *Store) EnsureUserEmail(ctx context.Context, backfill string) error {
 		return err
 	}
 	rows.Close()
-	if !hasEmail {
-		if _, err := s.db.ExecContext(ctx,
-			`ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT '' COLLATE NOCASE`); err != nil {
+	if !has {
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE `+table+` ADD COLUMN `+columnDDL); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// EnsureUserEmail brings a pre-existing database up to the email-bearing users
+// schema: it adds the users.email column when missing and backfills any account
+// that predates the column with the given address. Fresh databases already have
+// the column from schema.sql and only the (no-op) backfill runs. Idempotent.
+func (s *Store) EnsureUserEmail(ctx context.Context, backfill string) error {
+	if err := s.ensureColumn(ctx, "users", "email", `email TEXT NOT NULL DEFAULT '' COLLATE NOCASE`); err != nil {
+		return err
 	}
 	// Index lives here (not schema.sql) so it's created only once the column is
 	// guaranteed present — schema.sql runs before this on a pre-email DB.
@@ -111,6 +119,12 @@ func (s *Store) EnsureUserEmail(ctx context.Context, backfill string) error {
 		}
 	}
 	return nil
+}
+
+// EnsureSpotQuality adds the spots.quality column (0 = unrated) to a database
+// that predates it. Fresh databases already have it from schema.sql. Idempotent.
+func (s *Store) EnsureSpotQuality(ctx context.Context) error {
+	return s.ensureColumn(ctx, "spots", "quality", `quality INTEGER NOT NULL DEFAULT 0`)
 }
 
 func nowMS() int64 { return time.Now().UnixMilli() }
@@ -305,10 +319,10 @@ func (s *Store) CreateSpot(ctx context.Context, sp *models.Spot) (*models.Spot, 
 	sp.Geohash = geo.Encode(sp.Lat, sp.Lng, GeohashPrecision)
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO spots (id, venue_name, essid, password, auth_type, lat, lng, geohash,
-		 notes, ping_ms, down_mbps, up_mbps, created_by, created_at, updated_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 notes, ping_ms, down_mbps, up_mbps, quality, created_by, created_at, updated_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		sp.ID, sp.VenueName, sp.ESSID, sp.Password, sp.AuthType, sp.Lat, sp.Lng, sp.Geohash,
-		sp.Notes, sp.PingMS, sp.DownMbps, sp.UpMbps, sp.CreatedBy, sp.CreatedAt, sp.UpdatedAt)
+		sp.Notes, sp.PingMS, sp.DownMbps, sp.UpMbps, sp.Quality, sp.CreatedBy, sp.CreatedAt, sp.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -342,9 +356,9 @@ func (s *Store) UpdateSpot(ctx context.Context, sp *models.Spot) error {
 	sp.Geohash = geo.Encode(sp.Lat, sp.Lng, GeohashPrecision)
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE spots SET venue_name=?, essid=?, password=?, auth_type=?, lat=?, lng=?,
-		 geohash=?, notes=?, ping_ms=?, down_mbps=?, up_mbps=?, updated_at=? WHERE id=?`,
+		 geohash=?, notes=?, ping_ms=?, down_mbps=?, up_mbps=?, quality=?, updated_at=? WHERE id=?`,
 		sp.VenueName, sp.ESSID, sp.Password, sp.AuthType, sp.Lat, sp.Lng, sp.Geohash,
-		sp.Notes, sp.PingMS, sp.DownMbps, sp.UpMbps, sp.UpdatedAt, sp.ID)
+		sp.Notes, sp.PingMS, sp.DownMbps, sp.UpMbps, sp.Quality, sp.UpdatedAt, sp.ID)
 	if err != nil {
 		return err
 	}

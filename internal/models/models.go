@@ -43,6 +43,7 @@ type Spot struct {
 	PingMS    *int     `json:"ping_ms,omitempty"`
 	DownMbps  *float64 `json:"down_mbps,omitempty"`
 	UpMbps    *float64 `json:"up_mbps,omitempty"`
+	Quality   int      `json:"quality"` // manual rating: 0=unrated, 1=basic, 2=good, 3=great
 	CreatedBy string   `json:"created_by"`
 	CreatedAt int64    `json:"created_at"`
 	UpdatedAt int64    `json:"updated_at"`
@@ -96,7 +97,7 @@ func NewID() string {
 // SpotColumns is the canonical SELECT column order for a spot row, shared by
 // the server store and the CLI cache so both stay in lock-step with ScanSpot.
 const SpotColumns = `id, venue_name, essid, password, auth_type, lat, lng, geohash, notes,
-	ping_ms, down_mbps, up_mbps, created_by, created_at, updated_at`
+	ping_ms, down_mbps, up_mbps, quality, created_by, created_at, updated_at`
 
 // Scanner is the read side shared by *sql.Row and *sql.Rows, letting the store
 // and the CLI cache reuse one spot-row scanner.
@@ -110,7 +111,7 @@ func ScanSpot(sc Scanner) (*Spot, error) {
 	var ping sql.NullInt64
 	var down, up sql.NullFloat64
 	if err := sc.Scan(&sp.ID, &sp.VenueName, &sp.ESSID, &sp.Password, &sp.AuthType,
-		&sp.Lat, &sp.Lng, &sp.Geohash, &sp.Notes, &ping, &down, &up,
+		&sp.Lat, &sp.Lng, &sp.Geohash, &sp.Notes, &ping, &down, &up, &sp.Quality,
 		&sp.CreatedBy, &sp.CreatedAt, &sp.UpdatedAt); err != nil {
 		return nil, err
 	}

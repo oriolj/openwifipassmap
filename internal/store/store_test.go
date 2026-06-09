@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oriolj/openwifipassmap/internal/models"
 	"github.com/oriolj/openwifipassmap/migrations"
 )
 
@@ -125,6 +126,41 @@ func TestPasswordResetTokenLifecycle(t *testing.T) {
 	got, _ := s.GetUserByID(ctx, u.ID)
 	if got.PasswordHash != "newhash" {
 		t.Errorf("password hash = %q, want newhash", got.PasswordHash)
+	}
+}
+
+func TestSpotQualityAndCount(t *testing.T) {
+	s, ctx := openTestStore(t)
+	u, err := s.CreateUser(ctx, "contrib", "c@example.com", "h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	down := 150.0
+	created, err := s.CreateSpot(ctx, &models.Spot{
+		ESSID: "Fibre", AuthType: "wpa2", Lat: 41.1, Lng: 2.1,
+		Quality: 3, DownMbps: &down, CreatedBy: u.ID,
+	})
+	if err != nil {
+		t.Fatalf("create spot: %v", err)
+	}
+
+	got, err := s.GetSpot(ctx, created.ID, "")
+	if err != nil {
+		t.Fatalf("get spot: %v", err)
+	}
+	if got.Quality != 3 {
+		t.Errorf("quality = %d, want 3", got.Quality)
+	}
+	if got.DownMbps == nil || *got.DownMbps != 150 {
+		t.Errorf("down_mbps = %v, want 150", got.DownMbps)
+	}
+
+	n, err := s.CountSpotsByUser(ctx, u.ID)
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("CountSpotsByUser = %d, want 1", n)
 	}
 }
 

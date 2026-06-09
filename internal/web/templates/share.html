@@ -32,6 +32,11 @@
           <span class="opacity-60">Security</span>
           <span class="col-span-2 uppercase">{{.AuthType}}</span>
 
+          {{if .Quality}}
+          <span class="opacity-60">Quality</span>
+          <span class="col-span-2 font-semibold" style="color:{{qualityColor .Quality}}" data-testid="quality">{{qualityStars .Quality}}</span>
+          {{end}}
+
           {{if .Notes}}
           <span class="opacity-60">Notes</span>
           <span class="col-span-2">{{.Notes}}</span>

@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS spots (
     ping_ms    INTEGER,
     down_mbps  REAL,
     up_mbps    REAL,
+    quality    INTEGER NOT NULL DEFAULT 0, -- manual rating: 0=unrated, 1=basic, 2=good, 3=great
     created_by TEXT NOT NULL REFERENCES users(id),
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL

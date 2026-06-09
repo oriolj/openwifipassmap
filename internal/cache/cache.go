@@ -6,6 +6,7 @@ package cache
 import (
 	"context"
 	"database/sql"
+	"strings"
 
 	"github.com/oriolj/openwifipassmap/internal/geo"
 	"github.com/oriolj/openwifipassmap/internal/models"
@@ -17,7 +18,7 @@ const schema = `
 CREATE TABLE IF NOT EXISTS spots (
     id TEXT PRIMARY KEY, venue_name TEXT, essid TEXT, password TEXT, auth_type TEXT,
     lat REAL, lng REAL, geohash TEXT, notes TEXT,
-    ping_ms INTEGER, down_mbps REAL, up_mbps REAL,
+    ping_ms INTEGER, down_mbps REAL, up_mbps REAL, quality INTEGER NOT NULL DEFAULT 0,
     created_by TEXT, created_at INTEGER, updated_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_cache_latlng ON spots(lat, lng);
@@ -36,6 +37,13 @@ func Open(path string) (*Cache, error) {
 	if _, err := db.ExecContext(context.Background(), schema); err != nil {
 		return nil, err
 	}
+	// Best-effort upgrade of a cache.db created before `quality` existed. SQLite
+	// has no ADD COLUMN IF NOT EXISTS, so ignore the duplicate-column error.
+	if _, err := db.ExecContext(context.Background(),
+		`ALTER TABLE spots ADD COLUMN quality INTEGER NOT NULL DEFAULT 0`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column name") {
+		return nil, err
+	}
 	return &Cache{db: db}, nil
 }
 
@@ -47,10 +55,10 @@ func (c *Cache) Upsert(ctx context.Context, sp *models.Spot) error {
 	_, err := c.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO spots
 		 (id, venue_name, essid, password, auth_type, lat, lng, geohash, notes,
-		  ping_ms, down_mbps, up_mbps, created_by, created_at, updated_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		  ping_ms, down_mbps, up_mbps, quality, created_by, created_at, updated_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		sp.ID, sp.VenueName, sp.ESSID, sp.Password, sp.AuthType, sp.Lat, sp.Lng,
-		sp.Geohash, sp.Notes, sp.PingMS, sp.DownMbps, sp.UpMbps, sp.CreatedBy,
+		sp.Geohash, sp.Notes, sp.PingMS, sp.DownMbps, sp.UpMbps, sp.Quality, sp.CreatedBy,
 		sp.CreatedAt, sp.UpdatedAt)
 	return err
 }

@@ -454,6 +454,7 @@ type spotReq struct {
 	PingMS    *int     `json:"ping_ms"`
 	DownMbps  *float64 `json:"down_mbps"`
 	UpMbps    *float64 `json:"up_mbps"`
+	Quality   *int     `json:"quality"`
 }
 
 func (req *spotReq) apply(sp *models.Spot) string {
@@ -473,6 +474,9 @@ func (req *spotReq) apply(sp *models.Spot) string {
 	if !models.ValidAuthTypes[authType] {
 		return "auth_type must be one of wpa2, wpa3, wep, open"
 	}
+	if req.Quality != nil && (*req.Quality < 0 || *req.Quality > 3) {
+		return "quality must be between 0 (unrated) and 3"
+	}
 	sp.VenueName = strings.TrimSpace(req.VenueName)
 	sp.ESSID = req.ESSID
 	sp.Password = req.Password
@@ -483,6 +487,9 @@ func (req *spotReq) apply(sp *models.Spot) string {
 	sp.PingMS = req.PingMS
 	sp.DownMbps = req.DownMbps
 	sp.UpMbps = req.UpMbps
+	if req.Quality != nil {
+		sp.Quality = *req.Quality
+	}
 	return ""
 }
 

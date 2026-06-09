@@ -60,6 +60,11 @@ func main() {
 		log.Error("email migration failed", "err", err)
 		os.Exit(1)
 	}
+	if err := st.EnsureSpotQuality(ctx); err != nil {
+		cancel()
+		log.Error("quality migration failed", "err", err)
+		os.Exit(1)
+	}
 	cancel()
 
 	mailer := email.New(env("RESEND_API_KEY", ""), env("RESEND_FROM", ""), log)

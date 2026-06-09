@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/oriolj/openwifipassmap/internal/store"
@@ -27,7 +28,9 @@ type Web struct {
 // New parses templates and returns a Web.
 func New(s *store.Store) (*Web, error) {
 	t, err := template.New("").Funcs(template.FuncMap{
-		"humanizeAgo": humanizeAgo,
+		"humanizeAgo":  humanizeAgo,
+		"qualityStars": qualityStars,
+		"qualityColor": qualityColor,
 	}).ParseFS(tmplFS, "templates/*.html")
 	if err != nil {
 		return nil, err
@@ -54,6 +57,29 @@ func humanizeAgo(ms *int64) string {
 		return fmt.Sprintf("%d days ago", int(d.Hours()/24))
 	default:
 		return fmt.Sprintf("%d months ago", int(d.Hours()/(24*30)))
+	}
+}
+
+// qualityStars renders a manual quality rating (1-3) as filled/empty stars;
+// "" for unrated so the template can omit the row entirely.
+func qualityStars(q int) string {
+	if q < 1 || q > 3 {
+		return ""
+	}
+	return strings.Repeat("★", q) + strings.Repeat("☆", 3-q)
+}
+
+// qualityColor maps a quality rating to the same palette the map pins use.
+func qualityColor(q int) string {
+	switch q {
+	case 3:
+		return "#16a34a"
+	case 2:
+		return "#f59e0b"
+	case 1:
+		return "#dc2626"
+	default:
+		return "#9ca3af"
 	}
 }
 

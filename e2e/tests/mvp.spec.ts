@@ -243,6 +243,53 @@ test("Public web: malicious spot fields are rendered as text, not executed (XSS 
   await expect(page.getByText("PwnedCafe")).toBeVisible();
 });
 
+test("Web: quality stars, speed, and the quality/speed filters", async ({ page, request, context }) => {
+  await context.grantPermissions(["geolocation"]);
+  const username = uniqueUser();
+  const reg = await request.post(`${BACKEND}/api/auth/register`, {
+    data: { username, email: EMAIL, password: PASSWORD },
+  });
+  const token = (await reg.json()).token as string;
+
+  // A great/fast spot and a basic/slow one, close together.
+  for (const s of [
+    { venue_name: "Fast Fibre Café", essid: "Fast-Guest", auth_type: "wpa2", lat: 41.3851, lng: 2.1734, quality: 3, down_mbps: 150 },
+    { venue_name: "Slow Corner", essid: "Slow-Guest", auth_type: "wpa2", lat: 41.3853, lng: 2.1736, quality: 1, down_mbps: 5 },
+  ]) {
+    const r = await request.post(`${BACKEND}/api/spots`, {
+      headers: { Authorization: `Bearer ${token}` },
+      data: s,
+    });
+    expect(r.status()).toBe(201);
+  }
+
+  await page.goto(`${BACKEND}/?lat=41.3851&lng=2.1734&zoom=15`);
+  const fast = page.getByTestId("spot").filter({ hasText: "Fast Fibre Café" });
+  const slow = page.getByTestId("spot").filter({ hasText: "Slow Corner" });
+  await expect(fast).toBeVisible({ timeout: 10_000 });
+  await expect(slow).toBeVisible();
+
+  // Quality stars + speed render on the card.
+  await expect(fast.getByTestId("spot-quality")).toHaveText("★★★");
+  await expect(fast.getByTestId("spot-speed")).toContainText("150");
+
+  // Filter to ★★★ only → the basic spot drops out.
+  await page.getByTestId("filter-quality").selectOption("3");
+  await expect(fast).toBeVisible();
+  await expect(slow).toHaveCount(0);
+
+  // Reset quality; filter to 100+ Mbps → still only the fast one (150 vs 5).
+  await page.getByTestId("filter-quality").selectOption("0");
+  await page.getByTestId("filter-speed").selectOption("100");
+  await expect(fast).toBeVisible();
+  await expect(slow).toHaveCount(0);
+
+  // Share page surfaces the quality stars.
+  const href = await fast.getByRole("link", { name: "View & share" }).getAttribute("href");
+  await page.goto(`${BACKEND}${href}`);
+  await expect(page.getByTestId("quality")).toHaveText("★★★");
+});
+
 test("Password reset: email required to register, forgot is non-enumerating, bad token rejected", async ({
   request,
 }) => {
