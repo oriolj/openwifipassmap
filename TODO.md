@@ -1,6 +1,6 @@
 # TODO
 
-Loose backlog of things worth doing. Not prioritized.
+Loose backlog of things worth doing. Not prioritized, except the last step.
 
 ## Before launch
 
@@ -34,12 +34,22 @@ Loose backlog of things worth doing. Not prioritized.
   magic link (1 h TTL) that lands on the server-rendered `/reset` page →
   `POST /api/auth/reset-password`. Mail is sent off the hot path (goroutine).
   Pre-email accounts are backfilled to `BACKFILL_EMAIL` on boot.
-- [ ] **Email verification on signup** (confirm the address actually belongs to
-  the registrant before it's usable for reset). Not done yet — emails are trusted
-  as-entered.
+- [x] **Email verification on signup.** Verification link at register (48 h
+  TTL, `/verify` page); accounts work immediately but forgot-password only
+  emails verified addresses; backfilled accounts marked verified.
+- [ ] Resend-verification action for users who lost the signup email.
 - [ ] Catch mail locally with **Mailpit** during dev (currently the dev fallback
   just logs the message; wiring SMTP→Mailpit would let us see rendered mail).
-- [ ] Consider rate-limiting register / login / forgot-password (currently
-  unthrottled — forgot-password in particular can be used to spam an address).
-- [ ] Add a `/me` endpoint or surface the username on the reset page so
-  account-recovery ("what's my username") is self-serve.
+- [x] Rate-limit register / login / forgot-password / reset (per-IP token
+  buckets; forgot-password is the tight one since each request can send mail).
+- [x] `/api/me` exists (username + contribution count).
+
+## Last step (after everything above)
+
+- [ ] **Built-in speed test.** Instead of users typing Mbps numbers by hand,
+  measure it in the client: download (and ideally upload) a test payload and
+  prefill the review's speed fields with the result. Needs a test endpoint or
+  third-party target (self-hosted is privacy-friendlier — e.g. a `/speedtest`
+  payload route on the backend with rate limiting), a measuring widget in the
+  web review modal + mobile RateForm, and clear UX that it consumes data on
+  mobile connections. Ship last: it builds on the whole review pipeline.
