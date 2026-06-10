@@ -4,6 +4,33 @@ The backend is a single Go service that also serves the public web — deploy it
 a Coolify **Dockerfile** application (not Compose) to get **blue-green** deploys
 (build new container → health-check → swap traffic, zero downtime).
 
+## ⚠️ Pending operator actions
+
+One-time steps still to do in the Coolify UI / provider dashboards. Tick and
+prune as they're done.
+
+- [ ] **Turn on backups (Litestream).** The image ships with Litestream but it
+  only activates when credentials are set. Create an S3-compatible bucket
+  (Backblaze B2 is the cheap default), then set in Coolify (mark the two keys
+  **runtime-only**): `LITESTREAM_ACCESS_KEY_ID`, `LITESTREAM_SECRET_ACCESS_KEY`,
+  `REPLICA_BUCKET`, `REPLICA_ENDPOINT`. Redeploy, then check the container logs
+  for litestream replication lines. Until this is done **prod has no off-host
+  backup**.
+- [ ] **Fire-drill the restore once**: stop a staging container, wipe its
+  `/data`, boot — it should restore from the bucket before serving.
+- [ ] **Pin `PUBLIC_BASE_URL=https://openwifipassmap.oriolj.com`.** Without it
+  email links derive the host from forwarded headers (works, but pinning is
+  immune to Host-header games).
+- [ ] **Confirm `RESEND_API_KEY` is set** (runtime-only). `RESEND_FROM` is
+  optional (defaults to `no-reply@oriolj.com`).
+- [ ] **After the next deploy, do one test signup** — it now sends a
+  verification email (first real Resend traffic); click the `/verify` link and
+  then try forgot-password for that account.
+- [ ] **Re-check the `/data` persistent storage mount** after any resource
+  changes — see the SQLite-persistence footgun below.
+- [ ] Before public launch: Plausible analytics + compiled Tailwind CSS
+  (tracked in [TODO.md](../TODO.md)).
+
 ## Image
 
 [`docker/Dockerfile`](../docker/Dockerfile): multi-stage build, `CGO_ENABLED=0`
