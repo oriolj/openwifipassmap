@@ -45,6 +45,16 @@ export interface Spot {
   last_confirmed_at?: number;
   confirmations_count: number;
   confirmed_by_me?: boolean;
+  quality: number; // 0 unrated, 1-3 = rounded avg of community ratings
+  ratings_count: number;
+  my_rating?: number;
+}
+
+export interface ReviewInput {
+  quality?: number | null;
+  down_mbps?: number | null;
+  up_mbps?: number | null;
+  ping_ms?: number | null;
 }
 
 export interface SpotInput {
@@ -178,6 +188,20 @@ export async function createSpot(input: SpotInput): Promise<Spot> {
 export async function confirmSpot(id: string): Promise<Spot> {
   return request<Spot>(`/api/spots/${encodeURIComponent(id)}/confirm`, {
     method: "POST",
+  });
+}
+
+export async function reviewSpot(id: string, review: ReviewInput): Promise<Spot> {
+  return request<Spot>(`/api/spots/${encodeURIComponent(id)}/review`, {
+    method: "POST",
+    body: JSON.stringify(review),
+  });
+}
+
+export async function updateSpot(id: string, input: SpotInput): Promise<Spot> {
+  return request<Spot>(`/api/spots/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
   });
 }
 

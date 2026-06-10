@@ -11,8 +11,28 @@ import {
   logout,
   nearby,
   register,
+  reviewSpot,
+  updateSpot,
 } from "./api";
 import { getCurrentPosition } from "./location";
+
+// Quality palette — keep in sync with the server's canonical map
+// (internal/web/web.go qualityColors): 0 unrated, 1 basic, 2 good, 3 great.
+const QUALITY_COLOR: Record<number, string> = {
+  0: "#9ca3af",
+  1: "#dc2626",
+  2: "#f59e0b",
+  3: "#16a34a",
+};
+
+function speedText(s: Spot): string {
+  const parts: string[] = [];
+  if (s.down_mbps != null) parts.push(`${s.down_mbps}↓`);
+  if (s.up_mbps != null) parts.push(`${s.up_mbps}↑`);
+  let t = parts.length ? `${parts.join("/")} Mbps` : "";
+  if (s.ping_ms != null) t += `${t ? " · " : ""}${s.ping_ms} ms`;
+  return t;
+}
 
 function humanizeAgo(ms: number | undefined): string {
   if (!ms) return "";
@@ -285,6 +305,8 @@ function SpotCard({
   const [revealed, setRevealed] = useState(false);
   const [confirmError, setConfirmError] = useState("");
   const [confirming, setConfirming] = useState(false);
+  const [showRate, setShowRate] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
   const dist = spot.distance_km != null ? `${spot.distance_km.toFixed(1)} km` : "";
   const isOwn = user != null && spot.created_by === user.id;
 
@@ -317,6 +339,30 @@ function SpotCard({
             {dist}
           </span>
         </div>
+        {(spot.quality > 0 || speedText(spot)) && (
+          <div className="flex flex-wrap items-center gap-2">
+            {spot.quality > 0 && (
+              <span
+                className="text-xs font-semibold"
+                style={{ color: QUALITY_COLOR[spot.quality] ?? QUALITY_COLOR[0] }}
+                data-testid="spot-quality"
+              >
+                {"★".repeat(spot.quality)}
+                {"☆".repeat(3 - spot.quality)}
+              </span>
+            )}
+            {spot.ratings_count > 0 && (
+              <span className="text-xs opacity-60" data-testid="spot-ratings-count">
+                ({spot.ratings_count})
+              </span>
+            )}
+            {speedText(spot) && (
+              <span className="badge badge-ghost badge-sm text-xs" data-testid="spot-speed">
+                {speedText(spot)}
+              </span>
+            )}
+          </div>
+        )}
         {spot.password ? (
           <button
             className="btn btn-sm btn-outline w-fit"
@@ -367,14 +413,185 @@ function SpotCard({
                 {confirming ? "…" : "Confirm works"}
               </button>
             ))}
+          {user && (
+            <button
+              className="btn btn-xs btn-outline btn-primary"
+              data-testid="spot-rate"
+              onClick={() => {
+                setShowRate((v) => !v);
+                setShowEdit(false);
+              }}
+            >
+              ★ Rate
+            </button>
+          )}
+          {isOwn && (
+            <button
+              className="btn btn-xs btn-ghost"
+              data-testid="spot-edit"
+              onClick={() => {
+                setShowEdit((v) => !v);
+                setShowRate(false);
+              }}
+            >
+              ✏️ Edit
+            </button>
+          )}
         </div>
         {confirmError && (
           <p className="text-error text-xs" data-testid="confirm-error">
             {confirmError}
           </p>
         )}
+        {showRate && (
+          <RateForm
+            spot={spot}
+            onSaved={(s) => {
+              setShowRate(false);
+              onUpdated(s);
+            }}
+          />
+        )}
+        {showEdit && (
+          <EditForm
+            spot={spot}
+            onSaved={(s) => {
+              setShowEdit(false);
+              onUpdated(s);
+            }}
+          />
+        )}
       </div>
     </li>
+  );
+}
+
+// RateForm lets any logged-in user rate / speed-test a spot (their own
+// included — that just edits their initial rating).
+function RateForm({ spot, onSaved }: { spot: Spot; onSaved: (s: Spot) => void }) {
+  const [quality, setQuality] = useState(spot.my_rating ? String(spot.my_rating) : "");
+  const [down, setDown] = useState("");
+  const [up, setUp] = useState("");
+  const [ping, setPing] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const opt = (v: string, parse: (x: string) => number): number | null => {
+    const n = parse(v);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  };
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    const body = {
+      quality: quality ? parseInt(quality, 10) : null,
+      down_mbps: opt(down, parseFloat),
+      up_mbps: opt(up, parseFloat),
+      ping_ms: opt(ping, (v) => parseInt(v, 10)),
+    };
+    if (body.quality == null && body.down_mbps == null && body.up_mbps == null && body.ping_ms == null) {
+      setError("Pick a star rating and/or enter a speed measurement.");
+      return;
+    }
+    setBusy(true);
+    try {
+      onSaved(await reviewSpot(spot.id, body));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save review");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="space-y-2 border-t pt-2 mt-1" data-testid="rate-form" onSubmit={submit}>
+      <select
+        className="select select-bordered select-sm w-full"
+        data-testid="rate-quality"
+        value={quality}
+        onChange={(e) => setQuality(e.target.value)}
+      >
+        <option value="">Quality: keep my current rating</option>
+        <option value="1">★ Basic</option>
+        <option value="2">★★ Good</option>
+        <option value="3">★★★ Great</option>
+      </select>
+      <div className="grid grid-cols-3 gap-2">
+        <input className="input input-bordered input-sm" placeholder="↓ Mbps" type="number" min="0" step="0.1"
+               data-testid="rate-down" value={down} onChange={(e) => setDown(e.target.value)} />
+        <input className="input input-bordered input-sm" placeholder="↑ Mbps" type="number" min="0" step="0.1"
+               value={up} onChange={(e) => setUp(e.target.value)} />
+        <input className="input input-bordered input-sm" placeholder="ping ms" type="number" min="0" step="1"
+               value={ping} onChange={(e) => setPing(e.target.value)} />
+      </div>
+      {error && <p className="text-error text-xs" data-testid="rate-error">{error}</p>}
+      <button className="btn btn-primary btn-sm w-full" data-testid="rate-save" disabled={busy}>
+        {busy ? "…" : "Save review"}
+      </button>
+    </form>
+  );
+}
+
+// EditForm updates a spot's facts (venue, network, password, notes). Rating
+// and speed are community data — they go through RateForm instead.
+function EditForm({ spot, onSaved }: { spot: Spot; onSaved: (s: Spot) => void }) {
+  const [venue, setVenue] = useState(spot.venue_name);
+  const [essid, setEssid] = useState(spot.essid);
+  const [authType, setAuthType] = useState(spot.auth_type);
+  const [password, setPassword] = useState(spot.password);
+  const [notes, setNotes] = useState(spot.notes);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    setBusy(true);
+    try {
+      onSaved(
+        await updateSpot(spot.id, {
+          venue_name: venue,
+          essid,
+          auth_type: authType,
+          password: authType === "open" ? "" : password,
+          notes,
+          lat: spot.lat,
+          lng: spot.lng,
+        }),
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save changes");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="space-y-2 border-t pt-2 mt-1" data-testid="edit-form" onSubmit={submit}>
+      <input className="input input-bordered input-sm w-full" placeholder="Venue name"
+             data-testid="edit-venue" value={venue} onChange={(e) => setVenue(e.target.value)} />
+      <input className="input input-bordered input-sm w-full" placeholder="Network name (SSID)"
+             data-testid="edit-essid" value={essid} onChange={(e) => setEssid(e.target.value)} />
+      <div className="grid grid-cols-2 gap-2">
+        <select className="select select-bordered select-sm" value={authType}
+                onChange={(e) => setAuthType(e.target.value)}>
+          <option value="wpa2">WPA2</option>
+          <option value="wpa3">WPA3</option>
+          <option value="wep">WEP</option>
+          <option value="open">Open</option>
+        </select>
+        <input className="input input-bordered input-sm" placeholder="Password" disabled={authType === "open"}
+               data-testid="edit-password" value={authType === "open" ? "" : password}
+               onChange={(e) => setPassword(e.target.value)} />
+      </div>
+      <textarea className="textarea textarea-bordered textarea-sm w-full" placeholder="Notes"
+                value={notes} onChange={(e) => setNotes(e.target.value)} />
+      {error && <p className="text-error text-xs" data-testid="edit-error">{error}</p>}
+      <button className="btn btn-primary btn-sm w-full" data-testid="edit-save" disabled={busy}>
+        {busy ? "…" : "Save changes"}
+      </button>
+    </form>
   );
 }
 
