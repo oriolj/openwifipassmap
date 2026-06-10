@@ -40,16 +40,18 @@ make docker-build      # docker build -f docker/Dockerfile -t openwifipassmap:la
 
 ## Litestream (backup / restore)
 
-To add continuous backup, install Litestream in the image and make it the
-entrypoint wrapping the server (so the DB is restored on boot and replicated
-live):
+Litestream is baked into the image. The entrypoint
+([`docker/entrypoint.sh`](../docker/entrypoint.sh)) activates it only when
+`LITESTREAM_ACCESS_KEY_ID` is set: it first restores the DB from the replica if
+the local file is missing (fresh volume / new host), then runs the server under
+`litestream replicate -exec` so every write streams to the bucket. Without
+credentials (local docker, CI) the server runs plain.
 
-```dockerfile
-# add to the runtime stage
-COPY --from=litestream/litestream:0.3 /usr/local/bin/litestream /usr/local/bin/
-COPY docker/litestream.yml /etc/litestream.yml
-ENTRYPOINT ["litestream", "replicate", "-exec", "/app/server"]
-```
+Set in Coolify (runtime-only secrets): `LITESTREAM_ACCESS_KEY_ID`,
+`LITESTREAM_SECRET_ACCESS_KEY`, `REPLICA_BUCKET`, `REPLICA_ENDPOINT`
+(e.g. Backblaze B2 / MinIO). Misconfigured credentials make the container exit
+loudly instead of running unreplicated — fix the secrets rather than removing
+them.
 
 Config: [`docker/litestream.yml`](../docker/litestream.yml). Replication lag stays
 under ~1 s; on a fresh container Litestream restores the latest snapshot before

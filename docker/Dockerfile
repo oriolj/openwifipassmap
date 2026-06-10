@@ -16,6 +16,12 @@ RUN apk add --no-cache wget ca-certificates && \
 USER app
 WORKDIR /app
 COPY --from=build /out/server /app/server
+# Litestream: continuous SQLite replication to S3-compatible storage. The
+# entrypoint activates it only when LITESTREAM_ACCESS_KEY_ID is set, so the
+# image runs fine locally without credentials.
+COPY --from=litestream/litestream:0.3 /usr/local/bin/litestream /usr/local/bin/litestream
+COPY --chmod=755 docker/entrypoint.sh /app/entrypoint.sh
+COPY docker/litestream.yml /etc/litestream.yml
 
 ENV ADDR=:8080 \
     DB_PATH=/data/wifispot.db
@@ -27,4 +33,4 @@ HEALTHCHECK --interval=15s --timeout=3s --start-period=5s --retries=3 \
   CMD wget -qO- http://127.0.0.1:8080/api/health || exit 1
 
 STOPSIGNAL SIGTERM
-ENTRYPOINT ["/app/server"]
+ENTRYPOINT ["/app/entrypoint.sh"]
