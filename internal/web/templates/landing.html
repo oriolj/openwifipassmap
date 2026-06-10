@@ -15,40 +15,43 @@
   </style>
 </head>
 <body class="bg-base-200 flex flex-col h-screen">
-  <header class="navbar bg-base-100 shadow-sm shrink-0 gap-2">
-    <div class="flex-1 px-4 text-xl font-bold">📶 OpenWifiPassMap</div>
-    <button id="add-wifi" data-testid="add-wifi" class="btn btn-sm btn-primary">➕ Add WiFi</button>
-    <div id="account" class="px-2"></div>
+  <header class="navbar min-h-12 bg-base-100 shadow-sm shrink-0 gap-2">
+    <div class="flex-1 px-2 sm:px-3 text-sm sm:text-xl font-bold tracking-tight whitespace-nowrap overflow-hidden text-ellipsis">📶 OpenWifiPassMap</div>
+    <button id="add-wifi" data-testid="add-wifi" class="btn btn-sm btn-primary shrink-0">➕ Add<span class="hidden sm:inline">&nbsp;WiFi</span></button>
+    <div id="account" class="pr-2 shrink-0"></div>
   </header>
 
-  <div class="flex-1 flex flex-col min-h-0 relative">
-    <div id="map" class="flex-1 min-h-0"></div>
+  <div class="flex-1 flex flex-col min-h-0">
+    <!-- The map gets its own positioning context so overlays (pick bar,
+         legend) are anchored to the MAP, never the list below it. -->
+    <div class="relative flex-1 min-h-0">
+      <div id="map" class="absolute inset-0"></div>
 
-    <!-- Location-pick bar: shown while the user is placing a new spot's pin. -->
-    <div id="pick-bar" data-testid="pick-bar"
-         class="hidden absolute top-2 left-1/2 -translate-x-1/2 z-[1000] w-[92%] max-w-md
-                bg-base-100 shadow-lg rounded-box border p-2 flex items-center gap-2">
-      <span class="text-sm flex-1">📍 Drag the pin to the venue, then continue.</span>
-      <button id="pick-cancel" class="btn btn-ghost btn-xs">Cancel</button>
-      <button id="pick-continue" data-testid="pick-continue" class="btn btn-primary btn-xs">Continue</button>
-    </div>
+      <!-- Location-pick bar: shown while the user is placing a new spot's pin. -->
+      <div id="pick-bar" data-testid="pick-bar"
+           class="hidden absolute top-2 left-1/2 -translate-x-1/2 z-[1000] w-[92%] max-w-md
+                  bg-base-100 shadow-lg rounded-box border p-2 flex items-center gap-2">
+        <span class="text-sm flex-1">📍 Drag the pin to the venue, then continue.</span>
+        <button id="pick-cancel" class="btn btn-ghost btn-xs">Cancel</button>
+        <button id="pick-continue" data-testid="pick-continue" class="btn btn-primary btn-xs">Continue</button>
+      </div>
 
-    <!-- Quality legend: pin colour = manual connection-quality rating. -->
-    <div class="absolute bottom-6 left-2 z-[1000] bg-base-100/90 rounded-box shadow p-2 text-xs leading-tight">
-      <div class="font-semibold mb-0.5">Quality</div>
-      <div><span style="color:#16a34a">●</span> Great</div>
-      <div><span style="color:#f59e0b">●</span> Good</div>
-      <div><span style="color:#dc2626">●</span> Basic</div>
-      <div><span style="color:#9ca3af">●</span> Unrated</div>
+      <!-- Quality legend: pin colour = community rating. Non-interactive so it
+           never blocks map gestures; sits above Leaflet's attribution line. -->
+      <div class="absolute bottom-7 left-2 z-[1000] pointer-events-none select-none
+                  bg-base-100/90 rounded-full shadow px-2.5 py-1
+                  flex items-center gap-x-2.5 text-[11px] leading-none whitespace-nowrap">
+        <span class="flex items-center gap-1"><span style="color:#16a34a">●</span>Great</span>
+        <span class="flex items-center gap-1"><span style="color:#f59e0b">●</span>Good</span>
+        <span class="flex items-center gap-1"><span style="color:#dc2626">●</span>Basic</span>
+        <span class="flex items-center gap-1"><span style="color:#9ca3af">●</span>Unrated</span>
+      </div>
     </div>
 
     <aside class="bg-base-100 border-t shrink-0 max-h-[40vh] overflow-y-auto">
-      <div class="flex justify-between items-center px-3 pt-2 gap-2">
-        <span id="status" data-testid="status" class="text-sm opacity-70">Loading…</span>
-        <button id="locate" data-testid="find-nearby" class="btn btn-sm btn-primary">📍 Center on me</button>
-      </div>
-      <div class="flex flex-wrap items-center gap-3 px-3 pt-2 text-xs">
-        <label class="flex items-center gap-1">Quality
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 pt-2">
+        <span id="status" data-testid="status" class="text-sm opacity-70 flex-1 basis-40">Loading…</span>
+        <label class="flex items-center gap-1 text-xs">Quality
           <select id="filter-quality" data-testid="filter-quality" class="select select-bordered select-xs">
             <option value="0">All</option>
             <option value="1">★+</option>
@@ -56,13 +59,14 @@
             <option value="3">★★★</option>
           </select>
         </label>
-        <label class="flex items-center gap-1">Speed
+        <label class="flex items-center gap-1 text-xs">Speed
           <select id="filter-speed" data-testid="filter-speed" class="select select-bordered select-xs">
             <option value="0">Any</option>
             <option value="25">25+ Mbps</option>
             <option value="100">100+ Mbps</option>
           </select>
         </label>
+        <button id="locate" data-testid="find-nearby" class="btn btn-sm btn-primary">📍 Center on me</button>
       </div>
       <ul id="results" data-testid="results" class="grid gap-2 grid-cols-1 sm:grid-cols-2 p-3"></ul>
     </aside>
