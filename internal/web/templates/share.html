@@ -34,7 +34,10 @@
 
           {{if .Quality}}
           <span class="opacity-60">Quality</span>
-          <span class="col-span-2 font-semibold" style="color:{{qualityColor .Quality}}" data-testid="quality">{{qualityStars .Quality}}</span>
+          <span class="col-span-2">
+            <span class="font-semibold" style="color:{{qualityColor .Quality}}" data-testid="quality">{{qualityStars .Quality}}</span>
+            {{if .RatingsCount}}<span class="text-xs opacity-60">({{.RatingsCount}} rating{{if ne .RatingsCount 1}}s{{end}})</span>{{end}}
+          </span>
           {{end}}
 
           {{if .Notes}}

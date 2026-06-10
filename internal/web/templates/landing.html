@@ -92,10 +92,11 @@
     </div>
   </dialog>
 
-  <!-- Add-spot modal: opened after a location is picked on the map. -->
+  <!-- Add/edit-spot modal: opened after a location is picked (create) or from
+       a card's Edit button (own spots; facts only, rating goes via reviews). -->
   <dialog id="add-modal" data-testid="add-modal" class="modal">
     <div class="modal-box max-w-sm">
-      <h3 class="font-bold text-lg">Add a WiFi spot</h3>
+      <h3 id="add-title" class="font-bold text-lg">Add a WiFi spot</h3>
       <p id="add-coords" data-testid="add-coords" class="text-xs opacity-70 mb-3"></p>
       <form id="add-form" class="space-y-2">
         <input id="add-venue" data-testid="add-venue" class="input input-bordered w-full" placeholder="Venue name (e.g. Café Luna)" />
@@ -108,24 +109,55 @@
         </select>
         <input id="add-password" data-testid="add-password" class="input input-bordered w-full" placeholder="Password" />
         <textarea id="add-notes" data-testid="add-notes" class="textarea textarea-bordered w-full" placeholder="Notes (optional)"></textarea>
-        <select id="add-quality" data-testid="add-quality" class="select select-bordered w-full">
-          <option value="0" selected>Quality rating: unrated</option>
-          <option value="1">★ Basic</option>
-          <option value="2">★★ Good</option>
-          <option value="3">★★★ Great</option>
-        </select>
-        <div class="grid grid-cols-3 gap-2">
-          <input id="add-down" data-testid="add-down" type="number" min="0" step="0.1"
-                 class="input input-bordered w-full" placeholder="↓ Mbps" />
-          <input id="add-up" data-testid="add-up" type="number" min="0" step="0.1"
-                 class="input input-bordered w-full" placeholder="↑ Mbps" />
-          <input id="add-ping" data-testid="add-ping" type="number" min="0" step="1"
-                 class="input input-bordered w-full" placeholder="ping ms" />
+        <div id="add-rating-fields" class="space-y-2">
+          <select id="add-quality" data-testid="add-quality" class="select select-bordered w-full">
+            <option value="0" selected>Quality rating: unrated</option>
+            <option value="1">★ Basic</option>
+            <option value="2">★★ Good</option>
+            <option value="3">★★★ Great</option>
+          </select>
+          <div class="grid grid-cols-3 gap-2">
+            <input id="add-down" data-testid="add-down" type="number" min="0" step="0.1"
+                   class="input input-bordered w-full" placeholder="↓ Mbps" />
+            <input id="add-up" data-testid="add-up" type="number" min="0" step="0.1"
+                   class="input input-bordered w-full" placeholder="↑ Mbps" />
+            <input id="add-ping" data-testid="add-ping" type="number" min="0" step="1"
+                   class="input input-bordered w-full" placeholder="ping ms" />
+          </div>
         </div>
         <p id="add-error" data-testid="add-error" class="text-error text-sm hidden"></p>
         <div class="modal-action">
           <button type="button" id="add-cancel" class="btn btn-ghost btn-sm">Cancel</button>
           <button type="submit" id="add-save" data-testid="add-save" class="btn btn-primary btn-sm">Save spot</button>
+        </div>
+      </form>
+    </div>
+  </dialog>
+
+  <!-- Review modal: any logged-in user rates / speed-tests any spot. -->
+  <dialog id="review-modal" data-testid="review-modal" class="modal">
+    <div class="modal-box max-w-sm">
+      <h3 class="font-bold text-lg">Rate this WiFi</h3>
+      <p id="review-target" data-testid="review-target" class="text-xs opacity-70 mb-3"></p>
+      <form id="review-form" class="space-y-2">
+        <select id="review-quality" data-testid="review-quality" class="select select-bordered w-full">
+          <option value="" selected>Quality: keep my current rating</option>
+          <option value="1">★ Basic</option>
+          <option value="2">★★ Good</option>
+          <option value="3">★★★ Great</option>
+        </select>
+        <div class="grid grid-cols-3 gap-2">
+          <input id="review-down" data-testid="review-down" type="number" min="0" step="0.1"
+                 class="input input-bordered w-full" placeholder="↓ Mbps" />
+          <input id="review-up" data-testid="review-up" type="number" min="0" step="0.1"
+                 class="input input-bordered w-full" placeholder="↑ Mbps" />
+          <input id="review-ping" data-testid="review-ping" type="number" min="0" step="1"
+                 class="input input-bordered w-full" placeholder="ping ms" />
+        </div>
+        <p id="review-error" data-testid="review-error" class="text-error text-sm hidden"></p>
+        <div class="modal-action">
+          <button type="button" id="review-cancel" class="btn btn-ghost btn-sm">Cancel</button>
+          <button type="submit" id="review-save" data-testid="review-save" class="btn btn-primary btn-sm">Save review</button>
         </div>
       </form>
     </div>
@@ -144,6 +176,12 @@
       if (text != null) n.textContent = text;
       return n;
     }
+
+    // Hooks wired up once the map/account section initialises (DOMContentLoaded):
+    // popupNode/listItem are defined up here but need the auth-aware actions.
+    let onRate = null;   // (spot) => open the review modal
+    let onEdit = null;   // (spot) => open the edit modal (own spots)
+    let myUserId = null; // authed user's id, for the "is this my spot?" check
 
     function humanizeAgo(ms) {
       if (!ms) return '';
@@ -216,9 +254,14 @@
         root.appendChild(el('div', 'text-xs', 'Open network'));
       }
       if (spot.notes) root.appendChild(el('div', 'text-xs opacity-70', spot.notes));
-      const link = el('a', 'btn btn-xs btn-link p-0 mt-1', 'Open share page');
+      const row = el('div', 'flex gap-2 items-center mt-1');
+      const link = el('a', 'btn btn-xs btn-link p-0', 'Open share page');
       link.setAttribute('href', '/s/' + encodeURIComponent(spot.id));
-      root.appendChild(link);
+      row.appendChild(link);
+      const rateBtn = el('button', 'btn btn-xs btn-outline btn-primary', '★ Rate');
+      rateBtn.addEventListener('click', () => onRate && onRate(spot));
+      row.appendChild(rateBtn);
+      root.appendChild(row);
       return root;
     }
 
@@ -238,17 +281,34 @@
       const meta = el('div', 'flex items-center gap-2 flex-wrap');
       const cardQ = qualityNode(spot);
       if (cardQ) meta.appendChild(cardQ);
+      if (spot.ratings_count) {
+        const rc = el('span', 'text-xs opacity-60', '(' + spot.ratings_count + ')');
+        rc.dataset.testid = 'spot-ratings-count';
+        meta.appendChild(rc);
+      }
       const cardS = speedNode(spot);
       if (cardS) meta.appendChild(cardS);
       if (meta.children.length) body.appendChild(meta);
       const cardBadge = confirmationBadge(spot);
       if (cardBadge) body.appendChild(cardBadge);
+      const actions = el('div', 'flex gap-2 flex-wrap');
       const link = el('a', 'btn btn-xs btn-outline w-fit', 'View & share');
       link.setAttribute('href', '/s/' + encodeURIComponent(spot.id));
-      body.appendChild(link);
+      actions.appendChild(link);
+      const rateBtn = el('button', 'btn btn-xs btn-outline btn-primary', '★ Rate');
+      rateBtn.dataset.testid = 'spot-rate';
+      rateBtn.addEventListener('click', () => onRate && onRate(spot));
+      actions.appendChild(rateBtn);
+      if (myUserId && spot.created_by === myUserId) {
+        const editBtn = el('button', 'btn btn-xs btn-ghost', '✏️ Edit');
+        editBtn.dataset.testid = 'spot-edit';
+        editBtn.addEventListener('click', () => onEdit && onEdit(spot));
+        actions.appendChild(editBtn);
+      }
+      body.appendChild(actions);
       li.appendChild(body);
       li.addEventListener('click', (e) => {
-        if (e.target.tagName === 'A' || e.target.closest('a')) return;
+        if (e.target.closest('a, button')) return;
         map.flyTo([spot.lat, spot.lng], Math.max(map.getZoom(), 15));
       });
       return li;
@@ -338,7 +398,10 @@
         statusEl.textContent = 'Loading…';
         try {
           const r = radiusKm();
-          const res = await fetch(`/api/spots/area?lat=${c.lat}&lng=${c.lng}&radius_km=${r.toFixed(2)}`);
+          // Authed reads also return viewer fields (my_rating) for prefills.
+          const token = localStorage.getItem('owpm_token');
+          const res = await fetch(`/api/spots/area?lat=${c.lat}&lng=${c.lng}&radius_km=${r.toFixed(2)}`,
+            token ? { headers: { 'Authorization': 'Bearer ' + token } } : undefined);
           if (my !== reqToken) return;
           if (!res.ok) throw new Error('server returned ' + res.status);
           const data = await res.json();
@@ -421,9 +484,24 @@
       const addDown = document.getElementById('add-down');
       const addUp = document.getElementById('add-up');
       const addPing = document.getElementById('add-ping');
+      const addTitle = document.getElementById('add-title');
+      const addRatingFields = document.getElementById('add-rating-fields');
+      const reviewModal = document.getElementById('review-modal');
+      const reviewForm = document.getElementById('review-form');
+      const reviewError = document.getElementById('review-error');
+      const reviewQuality = document.getElementById('review-quality');
+      const reviewDown = document.getElementById('review-down');
+      const reviewUp = document.getElementById('review-up');
+      const reviewPing = document.getElementById('review-ping');
 
+      const ID_KEY = 'owpm_user_id'; // owner check for the Edit button
       const getToken = () => localStorage.getItem(TOKEN_KEY);
       const getUsername = () => localStorage.getItem(USER_KEY);
+      myUserId = localStorage.getItem(ID_KEY);
+
+      // Optional non-negative numbers: null (omit) when blank/invalid.
+      const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) && n >= 0 ? n : null; };
+      const int = (v) => { const n = parseInt(v, 10); return Number.isFinite(n) && n >= 0 ? n : null; };
 
       function showToast(msg, kind) {
         toastBody.className = 'alert alert-' + (kind || 'success');
@@ -441,6 +519,11 @@
           const res = await fetch('/api/me', { headers: { 'Authorization': 'Bearer ' + token } });
           if (!res.ok) return;
           const data = await res.json();
+          // Backfill the user id for sessions created before it was stored.
+          if (data.user && data.user.id) {
+            localStorage.setItem(ID_KEY, data.user.id);
+            if (myUserId !== data.user.id) { myUserId = data.user.id; renderSpots(); }
+          }
           const elc = document.getElementById('my-spot-count');
           if (elc) elc.textContent = data.spots_added + (data.spots_added === 1 ? ' WiFi added' : ' WiFis added');
         } catch (_) { /* leave the placeholder */ }
@@ -504,10 +587,13 @@
           if (!res.ok) throw new Error(data.error || ('server returned ' + res.status));
           localStorage.setItem(TOKEN_KEY, data.token);
           localStorage.setItem(USER_KEY, data.user ? data.user.username : username);
+          if (data.user && data.user.id) { localStorage.setItem(ID_KEY, data.user.id); myUserId = data.user.id; }
           renderAccount();
           authModal.close();
-          // If the user was mid-flow trying to add a spot, drop them into it.
+          loadSpots(); // re-fetch with auth so my_rating + Edit buttons appear
+          // If the user was mid-flow (adding or reviewing), drop them back in.
           if (pendingAdd) { pendingAdd = false; beginPlacement(); }
+          else if (pendingReviewSpot) { const s = pendingReviewSpot; pendingReviewSpot = null; openReview(s); }
         } catch (err) {
           authError.textContent = err.message;
           authError.classList.remove('hidden');
@@ -526,7 +612,10 @@
         }
         localStorage.removeItem(TOKEN_KEY);
         localStorage.removeItem(USER_KEY);
+        localStorage.removeItem(ID_KEY);
+        myUserId = null;
         renderAccount();
+        renderSpots(); // drop Edit buttons
       }
 
       document.getElementById('auth-login').addEventListener('click', () => submitAuth('login'));
@@ -584,6 +673,7 @@
       document.getElementById('pick-cancel').addEventListener('click', endPlacement);
       document.getElementById('pick-continue').addEventListener('click', () => {
         if (!placingMarker) return;
+        editingSpot = null;
         const ll = placingMarker.getLatLng();
         document.getElementById('add-coords').textContent =
           'Location: ' + ll.lat.toFixed(5) + ', ' + ll.lng.toFixed(5);
@@ -591,8 +681,31 @@
         addForm.reset();
         addAuthType.value = 'wpa2';
         syncPasswordEnabled();
+        addTitle.textContent = 'Add a WiFi spot';
+        addRatingFields.classList.remove('hidden');
         addModal.showModal();
       });
+
+      // --- Edit (own spots): same modal, prefilled, facts only — the rating
+      // and speed are community data, edited via the review modal instead.
+      let editingSpot = null;
+      function openEdit(spot) {
+        editingSpot = spot;
+        addError.classList.add('hidden');
+        addForm.reset();
+        document.getElementById('add-venue').value = spot.venue_name || '';
+        document.getElementById('add-essid').value = spot.essid || '';
+        addAuthType.value = spot.auth_type || 'wpa2';
+        syncPasswordEnabled();
+        addPassword.value = spot.password || '';
+        document.getElementById('add-notes').value = spot.notes || '';
+        document.getElementById('add-coords').textContent =
+          'Location: ' + spot.lat.toFixed(5) + ', ' + spot.lng.toFixed(5);
+        addTitle.textContent = 'Edit WiFi spot';
+        addRatingFields.classList.add('hidden');
+        addModal.showModal();
+      }
+      onEdit = openEdit;
 
       // Open networks have no password — disable the field so the value is empty.
       function syncPasswordEnabled() {
@@ -604,33 +717,34 @@
 
       async function submitSpot() {
         addError.classList.add('hidden');
-        if (!placingMarker) { addModal.close(); return; }
-        const ll = placingMarker.getLatLng();
+        const editing = editingSpot;
+        if (!editing && !placingMarker) { addModal.close(); return; }
+        const ll = editing ? { lat: editing.lat, lng: editing.lng } : placingMarker.getLatLng();
         const essid = document.getElementById('add-essid').value.trim();
         if (!essid) {
           addError.textContent = 'Network name (SSID) is required.';
           addError.classList.remove('hidden');
           return;
         }
-        // Optional speed numbers: send null (omit) when blank/invalid.
-        const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) && n >= 0 ? n : null; };
-        const int = (v) => { const n = parseInt(v, 10); return Number.isFinite(n) && n >= 0 ? n : null; };
         const body = {
           venue_name: document.getElementById('add-venue').value.trim(),
           essid,
           auth_type: addAuthType.value,
           password: addPassword.value,
           notes: document.getElementById('add-notes').value.trim(),
-          quality: parseInt(addQuality.value, 10) || 0,
-          down_mbps: num(addDown.value),
-          up_mbps: num(addUp.value),
-          ping_ms: int(addPing.value),
           lat: ll.lat,
           lng: ll.lng,
         };
+        if (!editing) {
+          // Initial rating/speed only at creation; afterwards it's a review.
+          body.quality = parseInt(addQuality.value, 10) || 0;
+          body.down_mbps = num(addDown.value);
+          body.up_mbps = num(addUp.value);
+          body.ping_ms = int(addPing.value);
+        }
         try {
-          const res = await fetch('/api/spots', {
-            method: 'POST',
+          const res = await fetch(editing ? '/api/spots/' + encodeURIComponent(editing.id) : '/api/spots', {
+            method: editing ? 'PUT' : 'POST',
             headers: {
               'Content-Type': 'application/json',
               'Authorization': 'Bearer ' + getToken(),
@@ -642,16 +756,21 @@
             // Session expired — clear it and prompt a fresh login.
             doLogout();
             addModal.close();
-            pendingAdd = true;
+            if (!editing) pendingAdd = true;
             openAuth();
             return;
           }
           if (!res.ok) throw new Error(data.error || ('server returned ' + res.status));
           addModal.close();
-          endPlacement();
-          showToast('WiFi spot added — thanks!');
+          if (editing) {
+            editingSpot = null;
+            showToast('Spot updated.');
+          } else {
+            endPlacement();
+            showToast('WiFi spot added — thanks!');
+            refreshMyStats();
+          }
           loadSpots();
-          refreshMyStats();
         } catch (err) {
           addError.textContent = err.message;
           addError.classList.remove('hidden');
@@ -662,6 +781,69 @@
       document.getElementById('add-cancel').addEventListener('click', () => { addModal.close(); });
       // The pin is intentionally kept on modal close so the user can re-open and
       // adjust; endPlacement() runs only on explicit cancel or a successful save.
+
+      // --- Reviews: any logged-in user rates / speed-tests any spot ---
+      let pendingReviewSpot = null; // set when Rate was clicked while logged out
+      let reviewingSpot = null;
+
+      function openReview(spot) {
+        if (!getToken()) { pendingReviewSpot = spot; openAuth(); return; }
+        reviewingSpot = spot;
+        reviewError.classList.add('hidden');
+        reviewForm.reset();
+        document.getElementById('review-target').textContent =
+          (spot.venue_name || spot.essid) + ' · current: ' +
+          (spot.quality ? '★'.repeat(spot.quality) : 'unrated') +
+          (spot.ratings_count ? ' (' + spot.ratings_count + ' rating' + (spot.ratings_count === 1 ? '' : 's') + ')' : '');
+        if (spot.my_rating) reviewQuality.value = String(spot.my_rating);
+        reviewModal.showModal();
+      }
+      onRate = openReview;
+
+      async function submitReview() {
+        reviewError.classList.add('hidden');
+        if (!reviewingSpot) { reviewModal.close(); return; }
+        const body = {
+          quality: reviewQuality.value ? parseInt(reviewQuality.value, 10) : null,
+          down_mbps: num(reviewDown.value),
+          up_mbps: num(reviewUp.value),
+          ping_ms: int(reviewPing.value),
+        };
+        if (body.quality == null && body.down_mbps == null && body.up_mbps == null && body.ping_ms == null) {
+          reviewError.textContent = 'Pick a star rating and/or enter a speed measurement.';
+          reviewError.classList.remove('hidden');
+          return;
+        }
+        try {
+          const res = await fetch('/api/spots/' + encodeURIComponent(reviewingSpot.id) + '/review', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer ' + getToken(),
+            },
+            body: JSON.stringify(body),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.status === 401) {
+            doLogout();
+            reviewModal.close();
+            pendingReviewSpot = reviewingSpot;
+            openAuth();
+            return;
+          }
+          if (!res.ok) throw new Error(data.error || ('server returned ' + res.status));
+          reviewModal.close();
+          reviewingSpot = null;
+          showToast('Thanks — review saved!');
+          loadSpots();
+        } catch (err) {
+          reviewError.textContent = err.message;
+          reviewError.classList.remove('hidden');
+        }
+      }
+
+      reviewForm.addEventListener('submit', (e) => { e.preventDefault(); submitReview(); });
+      document.getElementById('review-cancel').addEventListener('click', () => reviewModal.close());
 
       renderAccount();
     });

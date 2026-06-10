@@ -84,14 +84,17 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/auth/reset-password", a.resetPassword)
 	mux.HandleFunc("GET /api/me", h(a.me))
 
-	mux.HandleFunc("GET /api/spots/nearby", a.nearby)
-	mux.HandleFunc("GET /api/spots/area", a.area)
-	mux.HandleFunc("GET /api/spots/{id}", a.getSpot)
+	// Reads are anonymous but auth-aware: with a bearer token they also carry
+	// viewer-specific fields (confirmed_by_me, my_rating).
+	mux.HandleFunc("GET /api/spots/nearby", h(a.nearby))
+	mux.HandleFunc("GET /api/spots/area", h(a.area))
+	mux.HandleFunc("GET /api/spots/{id}", h(a.getSpot))
 	mux.HandleFunc("POST /api/spots", h(a.createSpot))
 	mux.HandleFunc("PUT /api/spots/{id}", h(a.updateSpot))
 	mux.HandleFunc("DELETE /api/spots/{id}", h(a.deleteSpot))
 	mux.HandleFunc("POST /api/spots/{id}/report", h(a.reportSpot))
 	mux.HandleFunc("POST /api/spots/{id}/confirm", h(a.confirmSpot))
+	mux.HandleFunc("POST /api/spots/{id}/review", h(a.reviewSpot))
 }
 
 // Middleware wraps a handler with optional-CORS handling.
@@ -553,6 +556,62 @@ func (a *API) updateSpot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.store.UpdateSpot(r.Context(), sp); err != nil {
+		a.serverErr(w, err)
+		return
+	}
+	// Quality/speed in a PUT body are the owner's review, not spot facts —
+	// route them through the reviews aggregate like everyone else's.
+	if req.Quality != nil || req.DownMbps != nil || req.UpMbps != nil || req.PingMS != nil {
+		if err := a.store.UpsertReview(r.Context(), sp.ID, u.ID, req.Quality, req.DownMbps, req.UpMbps, req.PingMS); err != nil {
+			a.serverErr(w, err)
+			return
+		}
+	}
+	fresh, err := a.store.GetSpot(r.Context(), sp.ID, u.ID)
+	if err != nil {
+		a.serverErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, fresh)
+}
+
+// reviewSpot records the authed user's rating (1-3) and/or speed measurement
+// for any spot — their own or someone else's — and returns the spot with
+// recomputed aggregates.
+func (a *API) reviewSpot(w http.ResponseWriter, r *http.Request) {
+	u, ok := a.requireUser(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Quality  *int     `json:"quality"`
+		DownMbps *float64 `json:"down_mbps"`
+		UpMbps   *float64 `json:"up_mbps"`
+		PingMS   *int     `json:"ping_ms"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.Quality == nil && req.DownMbps == nil && req.UpMbps == nil && req.PingMS == nil {
+		writeErr(w, http.StatusBadRequest, "provide a quality rating and/or a speed measurement")
+		return
+	}
+	if req.Quality != nil && (*req.Quality < 1 || *req.Quality > 3) {
+		writeErr(w, http.StatusBadRequest, "quality must be between 1 and 3")
+		return
+	}
+	spotID := r.PathValue("id")
+	err := a.store.UpsertReview(r.Context(), spotID, u.ID, req.Quality, req.DownMbps, req.UpMbps, req.PingMS)
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "spot not found")
+		return
+	}
+	if err != nil {
+		a.serverErr(w, err)
+		return
+	}
+	sp, err := a.store.GetSpot(r.Context(), spotID, u.ID)
+	if err != nil {
 		a.serverErr(w, err)
 		return
 	}

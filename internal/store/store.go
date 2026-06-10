@@ -326,20 +326,40 @@ func (s *Store) CreateSpot(ctx context.Context, sp *models.Spot) (*models.Spot, 
 	if err != nil {
 		return nil, err
 	}
+	// The creator's initial rating/speed is their review, so community
+	// aggregates include it (the spot row already carries the same values).
+	if sp.Quality > 0 || sp.DownMbps != nil || sp.UpMbps != nil || sp.PingMS != nil {
+		if _, err := s.db.ExecContext(ctx,
+			`INSERT OR IGNORE INTO reviews (spot_id, user_id, quality, down_mbps, up_mbps, ping_ms, created_at, updated_at)
+			 VALUES (?,?,?,?,?,?,?,?)`,
+			sp.ID, sp.CreatedBy, sp.Quality, sp.DownMbps, sp.UpMbps, sp.PingMS, sp.CreatedAt, sp.CreatedAt); err != nil {
+			return nil, err
+		}
+		sp.RatingsCount = boolToInt(sp.Quality > 0)
+		sp.MyRating = sp.Quality
+	}
 	return sp, nil
 }
 
-// GetSpot fetches a spot by id, enriched with confirmation stats. viewerID is
-// the requesting user's id (empty for anonymous) and powers ConfirmedByMe.
+// GetSpot fetches a spot by id, enriched with confirmation + review stats.
+// viewerID is the requesting user's id (empty for anonymous) and powers
+// ConfirmedByMe / MyRating.
 func (s *Store) GetSpot(ctx context.Context, id, viewerID string) (*models.Spot, error) {
 	sp, err := scanSpot(s.db.QueryRowContext(ctx, spotSelect+` WHERE id = ?`, id))
 	if err != nil {
 		return nil, err
 	}
-	if err := s.loadConfirmationStats(ctx, viewerID, []*models.Spot{sp}); err != nil {
+	if err := s.enrichSpots(ctx, viewerID, []*models.Spot{sp}); err != nil {
 		return nil, err
 	}
 	return sp, nil
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // ownedSpot returns an existing spot owned by createdBy with the same SSID and
@@ -350,15 +370,17 @@ func (s *Store) ownedSpot(ctx context.Context, createdBy, essid string, lat, lng
 		createdBy, essid, lat, lng))
 }
 
-// UpdateSpot updates the mutable fields of a spot (recomputing geohash).
+// UpdateSpot updates the factual fields of a spot (venue, network, location,
+// notes — recomputing geohash). Quality and speed are NOT written here: they
+// are community aggregates owned by the reviews table (see UpsertReview).
 func (s *Store) UpdateSpot(ctx context.Context, sp *models.Spot) error {
 	sp.UpdatedAt = nowMS()
 	sp.Geohash = geo.Encode(sp.Lat, sp.Lng, GeohashPrecision)
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE spots SET venue_name=?, essid=?, password=?, auth_type=?, lat=?, lng=?,
-		 geohash=?, notes=?, ping_ms=?, down_mbps=?, up_mbps=?, quality=?, updated_at=? WHERE id=?`,
+		 geohash=?, notes=?, updated_at=? WHERE id=?`,
 		sp.VenueName, sp.ESSID, sp.Password, sp.AuthType, sp.Lat, sp.Lng, sp.Geohash,
-		sp.Notes, sp.PingMS, sp.DownMbps, sp.UpMbps, sp.Quality, sp.UpdatedAt, sp.ID)
+		sp.Notes, sp.UpdatedAt, sp.ID)
 	if err != nil {
 		return err
 	}
@@ -435,7 +457,7 @@ func (s *Store) Nearby(ctx context.Context, lat, lng, radiusKM float64, limit in
 	if truncated {
 		out = out[:limit]
 	}
-	if err := s.loadConfirmationStats(ctx, viewerID, out); err != nil {
+	if err := s.enrichSpots(ctx, viewerID, out); err != nil {
 		return nil, false, err
 	}
 	return out, truncated, nil
@@ -482,7 +504,7 @@ func (s *Store) Area(ctx context.Context, lat, lng, radiusKM float64, cursor str
 	if scanned == limit {
 		next = lastID
 	}
-	if err := s.loadConfirmationStats(ctx, viewerID, page); err != nil {
+	if err := s.enrichSpots(ctx, viewerID, page); err != nil {
 		return nil, "", err
 	}
 	return page, next, nil
@@ -549,6 +571,120 @@ func (s *Store) loadConfirmationStats(ctx context.Context, viewerID string, spot
 		}
 	}
 	return rows.Err()
+}
+
+// enrichSpots loads all read-time aggregates (confirmation + review stats)
+// onto spots in place. Every spot-returning query path goes through this.
+func (s *Store) enrichSpots(ctx context.Context, viewerID string, spots []*models.Spot) error {
+	if err := s.loadConfirmationStats(ctx, viewerID, spots); err != nil {
+		return err
+	}
+	return s.loadReviewStats(ctx, viewerID, spots)
+}
+
+// loadReviewStats enriches spots in place with RatingsCount and (when
+// viewerID != "") MyRating. Same single-grouped-query shape as
+// loadConfirmationStats.
+func (s *Store) loadReviewStats(ctx context.Context, viewerID string, spots []*models.Spot) error {
+	if len(spots) == 0 {
+		return nil
+	}
+	byID := make(map[string]*models.Spot, len(spots))
+	args := make([]any, 0, len(spots)+1)
+	args = append(args, viewerID)
+	for _, sp := range spots {
+		byID[sp.ID] = sp
+		args = append(args, sp.ID)
+	}
+	placeholders := strings.Repeat("?,", len(spots)-1) + "?"
+	rows, err := s.db.QueryContext(ctx, `SELECT spot_id,
+		COUNT(CASE WHEN quality > 0 THEN 1 END),
+		COALESCE(MAX(CASE WHEN user_id = ? THEN quality END), 0)
+		FROM reviews WHERE spot_id IN (`+placeholders+`) GROUP BY spot_id`, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var spotID string
+		var count, mine int
+		if err := rows.Scan(&spotID, &count, &mine); err != nil {
+			return err
+		}
+		if sp := byID[spotID]; sp != nil {
+			sp.RatingsCount = count
+			sp.MyRating = mine
+		}
+	}
+	return rows.Err()
+}
+
+// UpsertReview records (or updates) userID's review of spotID — a quality
+// rating (1-3) and/or a speed measurement — then recomputes the spot's cached
+// aggregates: quality = rounded average of all ratings, speed fields = the
+// most recent measurement. Nil inputs leave the user's previous values in
+// place, so a speed-only re-review doesn't erase an earlier rating. Returns
+// ErrNotFound when the spot doesn't exist. Any user may review any spot,
+// including their own (that's just editing their initial rating).
+func (s *Store) UpsertReview(ctx context.Context, spotID, userID string, quality *int, down, up *float64, ping *int) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var one int
+	if err := tx.QueryRowContext(ctx, `SELECT 1 FROM spots WHERE id = ?`, spotID).Scan(&one); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+
+	now := nowMS()
+	q := 0
+	if quality != nil {
+		q = *quality
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO reviews (spot_id, user_id, quality, down_mbps, up_mbps, ping_ms, created_at, updated_at)
+		 VALUES (?,?,?,?,?,?,?,?)
+		 ON CONFLICT(spot_id, user_id) DO UPDATE SET
+		   quality   = CASE WHEN excluded.quality > 0 THEN excluded.quality ELSE reviews.quality END,
+		   down_mbps = COALESCE(excluded.down_mbps, reviews.down_mbps),
+		   up_mbps   = COALESCE(excluded.up_mbps, reviews.up_mbps),
+		   ping_ms   = COALESCE(excluded.ping_ms, reviews.ping_ms),
+		   updated_at = excluded.updated_at`,
+		spotID, userID, q, down, up, ping, now, now); err != nil {
+		return err
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE spots SET
+		   quality   = COALESCE((SELECT CAST(ROUND(AVG(quality)) AS INTEGER) FROM reviews WHERE spot_id = ?1 AND quality > 0), 0),
+		   down_mbps = (SELECT down_mbps FROM reviews WHERE spot_id = ?1 AND down_mbps IS NOT NULL ORDER BY updated_at DESC LIMIT 1),
+		   up_mbps   = (SELECT up_mbps   FROM reviews WHERE spot_id = ?1 AND up_mbps   IS NOT NULL ORDER BY updated_at DESC LIMIT 1),
+		   ping_ms   = (SELECT ping_ms   FROM reviews WHERE spot_id = ?1 AND ping_ms   IS NOT NULL ORDER BY updated_at DESC LIMIT 1),
+		   updated_at = ?2
+		 WHERE id = ?1`,
+		spotID, now); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// EnsureReviews backfills the reviews table from spots that predate it: each
+// spot's owner-set quality/speed becomes the owner's review row. Only spots
+// with no reviews at all are touched (a spot that already has community
+// reviews must not gain a fabricated owner rating from its aggregate), making
+// this idempotent and safe on every boot.
+func (s *Store) EnsureReviews(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO reviews (spot_id, user_id, quality, down_mbps, up_mbps, ping_ms, created_at, updated_at)
+		 SELECT id, created_by, quality, down_mbps, up_mbps, ping_ms, created_at, updated_at FROM spots
+		 WHERE (quality > 0 OR down_mbps IS NOT NULL OR up_mbps IS NOT NULL OR ping_ms IS NOT NULL)
+		   AND NOT EXISTS (SELECT 1 FROM reviews r WHERE r.spot_id = spots.id)`)
+	return err
 }
 
 // CreateReport inserts a moderation report.

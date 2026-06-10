@@ -290,6 +290,88 @@ test("Web: quality stars, speed, and the quality/speed filters", async ({ page, 
   await expect(page.getByTestId("quality")).toHaveText("★★★");
 });
 
+test("Web: another user reviews a spot (rating + speed); owner edits their own spot", async ({
+  page,
+  request,
+  context,
+}) => {
+  await context.grantPermissions(["geolocation"]);
+
+  // Owner creates a spot rated ★ with a slow measurement.
+  const owner = uniqueUser();
+  const ownerReg = await request.post(`${BACKEND}/api/auth/register`, {
+    data: { username: owner, email: EMAIL, password: PASSWORD },
+  });
+  const ownerJson = await ownerReg.json();
+  const ownerTok = ownerJson.token as string;
+  const ownerId = ownerJson.user.id as string;
+  const created = await request.post(`${BACKEND}/api/spots`, {
+    headers: { Authorization: `Bearer ${ownerTok}` },
+    data: { venue_name: "Review Café", essid: "Review-Guest", auth_type: "wpa2", lat: 41.39, lng: 2.18, quality: 1, down_mbps: 5 },
+  });
+  expect(created.status()).toBe(201);
+  const spotId = (await created.json()).id as string;
+
+  // A second user logs into the web (seed localStorage) and reviews it ★★★ + 200 Mbps.
+  const rater = uniqueUser();
+  const raterReg = await request.post(`${BACKEND}/api/auth/register`, {
+    data: { username: rater, email: EMAIL, password: PASSWORD },
+  });
+  const raterJson = await raterReg.json();
+  await page.goto(`${BACKEND}/?lat=41.39&lng=2.18&zoom=16`);
+  await page.evaluate(
+    ([t, u, id]) => {
+      localStorage.setItem("owpm_token", t);
+      localStorage.setItem("owpm_user", u);
+      localStorage.setItem("owpm_user_id", id);
+    },
+    [raterJson.token, rater, raterJson.user.id],
+  );
+  await page.reload();
+
+  const card = page.getByTestId("spot").filter({ hasText: "Review Café" });
+  await expect(card).toBeVisible({ timeout: 10_000 });
+  // Not the rater's spot — no Edit button.
+  await expect(card.getByTestId("spot-edit")).toHaveCount(0);
+
+  await card.getByTestId("spot-rate").click();
+  await expect(page.getByTestId("review-modal")).toBeVisible();
+  await page.getByTestId("review-quality").selectOption("3");
+  await page.getByTestId("review-down").fill("200");
+  await page.getByTestId("review-save").click();
+  await expect(page.getByTestId("toast")).toContainText("review saved");
+
+  // Aggregates: avg(1,3)=2 stars, 2 ratings, latest speed 200.
+  await expect(card.getByTestId("spot-quality")).toHaveText("★★☆", { timeout: 10_000 });
+  await expect(card.getByTestId("spot-ratings-count")).toHaveText("(2)");
+  await expect(card.getByTestId("spot-speed")).toContainText("200");
+
+  // Owner signs in on the web and edits the venue name (facts only).
+  await page.evaluate(
+    ([t, u, id]) => {
+      localStorage.setItem("owpm_token", t);
+      localStorage.setItem("owpm_user", u);
+      localStorage.setItem("owpm_user_id", id);
+    },
+    [ownerTok, owner, ownerId],
+  );
+  await page.reload();
+  const ownCard = page.getByTestId("spot").filter({ hasText: "Review Café" });
+  await expect(ownCard).toBeVisible({ timeout: 10_000 });
+  await ownCard.getByTestId("spot-edit").click();
+  await expect(page.getByTestId("add-modal")).toBeVisible();
+  await page.getByTestId("add-venue").fill("Renamed Café");
+  await page.getByTestId("add-save").click();
+  await expect(page.getByTestId("toast")).toContainText("updated");
+  await expect(page.getByTestId("spot").filter({ hasText: "Renamed Café" })).toBeVisible({ timeout: 10_000 });
+
+  // Editing didn't clobber the community aggregates.
+  const after = await (await request.get(`${BACKEND}/api/spots/${spotId}`)).json();
+  expect(after.quality).toBe(2);
+  expect(after.ratings_count).toBe(2);
+  expect(after.down_mbps).toBe(200);
+});
+
 test("Password reset: email required to register, forgot is non-enumerating, bad token rejected", async ({
   request,
 }) => {

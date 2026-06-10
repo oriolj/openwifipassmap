@@ -10,6 +10,13 @@ Loose backlog of things worth doing. Not prioritized.
   Coolify resource (not co-deployed with the app). Add the script to the
   server-rendered templates; respect Do-Not-Track.
 
+## Mobile
+
+- [ ] **Bring reviews to the mobile app.** The web now has rate/speed-test
+  (POST `/api/spots/{id}/review`) and owner edit; the Capacitor app still only
+  creates spots with an initial rating. Add a rate/review action on spot cards
+  and an edit screen for own spots.
+
 ## Infrastructure
 
 - [ ] **Real migration mechanism.** Schema changes now live in two places:

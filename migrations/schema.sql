@@ -64,6 +64,22 @@ CREATE TABLE IF NOT EXISTS reports (
 );
 CREATE INDEX IF NOT EXISTS idx_reports_spot ON reports(spot_id);
 
+-- One row per (spot, user): a user's quality rating (1-3, 0 = none) and/or
+-- speed measurement for a spot. Re-reviewing updates the row. The spot row
+-- caches the aggregates (quality = rounded avg rating, speeds = latest
+-- measurement), recomputed on every review write.
+CREATE TABLE IF NOT EXISTS reviews (
+    spot_id    TEXT NOT NULL REFERENCES spots(id) ON DELETE CASCADE,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    quality    INTEGER NOT NULL DEFAULT 0,
+    down_mbps  REAL,
+    up_mbps    REAL,
+    ping_ms    INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (spot_id, user_id)
+);
+
 -- One row per (spot, user): re-confirming refreshes created_at instead of
 -- piling up rows, so count = distinct users and spam by a single account is
 -- bounded structurally.

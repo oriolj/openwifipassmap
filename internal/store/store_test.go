@@ -164,6 +164,66 @@ func TestSpotQualityAndCount(t *testing.T) {
 	}
 }
 
+func TestReviewAggregates(t *testing.T) {
+	s, ctx := openTestStore(t)
+	owner, _ := s.CreateUser(ctx, "owner", "o@example.com", "h")
+	rater, _ := s.CreateUser(ctx, "rater", "r@example.com", "h")
+
+	down := 5.0
+	sp, err := s.CreateSpot(ctx, &models.Spot{
+		ESSID: "CafeNet", AuthType: "wpa2", Lat: 41.1, Lng: 2.1,
+		Quality: 1, DownMbps: &down, CreatedBy: owner.ID,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// Second user rates 3★ with a faster measurement.
+	q := 3
+	fast := 200.0
+	if err := s.UpsertReview(ctx, sp.ID, rater.ID, &q, &fast, nil, nil); err != nil {
+		t.Fatalf("review: %v", err)
+	}
+
+	got, err := s.GetSpot(ctx, sp.ID, rater.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Quality != 2 { // avg(1, 3) = 2
+		t.Errorf("quality = %d, want 2 (avg of 1 and 3)", got.Quality)
+	}
+	if got.RatingsCount != 2 {
+		t.Errorf("ratings_count = %d, want 2", got.RatingsCount)
+	}
+	if got.MyRating != 3 {
+		t.Errorf("my_rating = %d, want 3 (the viewer's own)", got.MyRating)
+	}
+	if got.DownMbps == nil || *got.DownMbps != 200 {
+		t.Errorf("down_mbps = %v, want 200 (latest measurement)", got.DownMbps)
+	}
+
+	// Speed-only re-review must not erase the user's earlier rating.
+	faster := 250.0
+	if err := s.UpsertReview(ctx, sp.ID, rater.ID, nil, &faster, nil, nil); err != nil {
+		t.Fatalf("re-review: %v", err)
+	}
+	got, _ = s.GetSpot(ctx, sp.ID, rater.ID)
+	if got.MyRating != 3 {
+		t.Errorf("my_rating after speed-only review = %d, want 3 (kept)", got.MyRating)
+	}
+	if got.Quality != 2 || got.RatingsCount != 2 {
+		t.Errorf("aggregates after speed-only review = q%d/%d ratings, want q2/2", got.Quality, got.RatingsCount)
+	}
+	if got.DownMbps == nil || *got.DownMbps != 250 {
+		t.Errorf("down_mbps = %v, want 250", got.DownMbps)
+	}
+
+	// Unknown spot → ErrNotFound.
+	if err := s.UpsertReview(ctx, "no-such-spot", rater.ID, &q, nil, nil, nil); !errors.Is(err, ErrNotFound) {
+		t.Errorf("review of missing spot err = %v, want ErrNotFound", err)
+	}
+}
+
 func TestDeleteUserSessions(t *testing.T) {
 	s, ctx := openTestStore(t)
 	u, err := s.CreateUser(ctx, "sess", "s@example.com", "h")

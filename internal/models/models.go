@@ -43,7 +43,7 @@ type Spot struct {
 	PingMS    *int     `json:"ping_ms,omitempty"`
 	DownMbps  *float64 `json:"down_mbps,omitempty"`
 	UpMbps    *float64 `json:"up_mbps,omitempty"`
-	Quality   int      `json:"quality"` // manual rating: 0=unrated, 1=basic, 2=good, 3=great
+	Quality   int      `json:"quality"` // rounded avg of review ratings: 0=unrated, 1=basic, 2=good, 3=great
 	CreatedBy string   `json:"created_by"`
 	CreatedAt int64    `json:"created_at"`
 	UpdatedAt int64    `json:"updated_at"`
@@ -58,6 +58,12 @@ type Spot struct {
 	LastConfirmedAt    *int64 `json:"last_confirmed_at,omitempty"`
 	ConfirmationsCount int    `json:"confirmations_count"`
 	ConfirmedByMe      bool   `json:"confirmed_by_me,omitempty"`
+
+	// Review aggregates (populated on read, like the confirmation stats).
+	// RatingsCount is how many users rated (quality > 0); MyRating is the
+	// viewer's own rating (0 when anonymous or not yet rated).
+	RatingsCount int `json:"ratings_count"`
+	MyRating     int `json:"my_rating,omitempty"`
 }
 
 // Confirmation is a user attesting that a spot's credentials work. One row per
