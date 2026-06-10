@@ -72,13 +72,95 @@
         </p>
         {{end}}
 
-        <a class="btn btn-primary btn-sm mt-3"
-           target="_blank" rel="noopener"
-           href="https://www.openstreetmap.org/?mlat={{.Lat}}&mlon={{.Lng}}#map=18/{{.Lat}}/{{.Lng}}">
-          Open in map
-        </a>
+        <div class="flex gap-2 mt-3">
+          <a class="btn btn-primary btn-sm"
+             target="_blank" rel="noopener"
+             href="https://www.openstreetmap.org/?mlat={{.Lat}}&mlon={{.Lng}}#map=18/{{.Lat}}/{{.Lng}}">
+            Open in map
+          </a>
+          <button id="rate-toggle" data-testid="share-rate" class="btn btn-outline btn-sm">★ Rate this WiFi</button>
+        </div>
+
+        <!-- Inline review form: any logged-in user (token from the map page)
+             can rate / submit a speed test right from a shared link. -->
+        <form id="rate-form" class="hidden space-y-2 mt-3 pt-3 border-t">
+          <input type="hidden" id="spot-id" value="{{.ID}}" />
+          <select id="rate-quality" data-testid="share-rate-quality" class="select select-bordered select-sm w-full">
+            <option value="" selected>Quality: keep my current rating</option>
+            <option value="1">★ Basic</option>
+            <option value="2">★★ Good</option>
+            <option value="3">★★★ Great</option>
+          </select>
+          <div class="grid grid-cols-3 gap-2">
+            <input id="rate-down" data-testid="share-rate-down" type="number" min="0" step="0.1"
+                   class="input input-bordered input-sm w-full" placeholder="↓ Mbps" />
+            <input id="rate-up" type="number" min="0" step="0.1"
+                   class="input input-bordered input-sm w-full" placeholder="↑ Mbps" />
+            <input id="rate-ping" type="number" min="0" step="1"
+                   class="input input-bordered input-sm w-full" placeholder="ping ms" />
+          </div>
+          <p id="rate-error" data-testid="share-rate-error" class="text-error text-sm hidden"></p>
+          <button type="submit" data-testid="share-rate-save" class="btn btn-primary btn-sm w-full">Save review</button>
+        </form>
+        <div id="rate-done" data-testid="share-rate-done" class="alert alert-success text-sm mt-3 hidden">
+          ✓ Review saved — thanks!
+        </div>
       </div>
     </div>
   </main>
+
+  <script>
+  (function () {
+    const form = document.getElementById('rate-form');
+    const errorEl = document.getElementById('rate-error');
+    const showError = (msg) => { errorEl.textContent = msg; errorEl.classList.remove('hidden'); };
+
+    document.getElementById('rate-toggle').addEventListener('click', () => {
+      errorEl.classList.add('hidden');
+      // Token is shared with the map page (same origin, same localStorage).
+      if (!localStorage.getItem('owpm_token')) {
+        form.classList.remove('hidden');
+        showError('Log in on the map page first, then come back to rate.');
+        return;
+      }
+      form.classList.toggle('hidden');
+    });
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errorEl.classList.add('hidden');
+      const token = localStorage.getItem('owpm_token');
+      if (!token) { showError('Log in on the map page first, then come back to rate.'); return; }
+      const q = document.getElementById('rate-quality').value;
+      const opt = (v, parse) => { const n = parse(v); return Number.isFinite(n) && n >= 0 ? n : null; };
+      const body = {
+        quality: q ? parseInt(q, 10) : null,
+        down_mbps: opt(document.getElementById('rate-down').value, parseFloat),
+        up_mbps: opt(document.getElementById('rate-up').value, parseFloat),
+        ping_ms: opt(document.getElementById('rate-ping').value, (v) => parseInt(v, 10)),
+      };
+      if (body.quality == null && body.down_mbps == null && body.up_mbps == null && body.ping_ms == null) {
+        showError('Pick a star rating and/or enter a speed measurement.');
+        return;
+      }
+      try {
+        const res = await fetch('/api/spots/' + encodeURIComponent(document.getElementById('spot-id').value) + '/review', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 401) { showError('Your session expired — log in on the map page again.'); return; }
+        if (!res.ok) throw new Error(data.error || ('server returned ' + res.status));
+        form.classList.add('hidden');
+        document.getElementById('rate-done').classList.remove('hidden');
+        // Reload after a beat so the server-rendered stars reflect the new rating.
+        setTimeout(() => location.reload(), 1200);
+      } catch (err) {
+        showError(err.message);
+      }
+    });
+  })();
+  </script>
 </body>
 </html>

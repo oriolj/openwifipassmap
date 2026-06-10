@@ -6,7 +6,10 @@
   <title>OpenWifiPassMap — find public WiFi nearby</title>
   <meta name="description" content="A crowdsourced map of public WiFi spots: cafés, libraries and venues with their network and password." />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" crossorigin="" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" crossorigin="" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin="" defer></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js" crossorigin="" defer></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://cdn.jsdelivr.net/npm/daisyui@4/dist/full.min.css" rel="stylesheet" type="text/css" />
   <style>
@@ -361,9 +364,14 @@
         attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
       }).addTo(map);
 
-      const markerLayer = L.layerGroup().addTo(map);
+      // Cluster dense viewports; fall back to a plain layer if the cluster
+      // plugin's CDN didn't load so the map still works.
+      const markerLayer = (L.markerClusterGroup
+        ? L.markerClusterGroup({ maxClusterRadius: 50, showCoverageOnHover: false })
+        : L.layerGroup()).addTo(map);
       let reqToken = 0;
       let currentSpots = []; // last fetched in-view set; filters apply on top
+      let viewTruncated = false; // true when the page cap stopped the cursor loop
 
       // Quality (min stars) + speed (min ↓ Mbps) filters, read from the selects.
       const filterQualityEl = document.getElementById('filter-quality');
@@ -386,12 +394,13 @@
         }
         resultsEl.replaceChildren();
         for (const s of shown) resultsEl.appendChild(listItem(s, map));
+        const more = viewTruncated ? ' — zoom in to see the rest' : '';
         if (currentSpots.length === 0) {
           statusEl.textContent = 'No spots in this area yet — add one with “➕ Add WiFi”.';
         } else if (shown.length === currentSpots.length) {
-          statusEl.textContent = `${shown.length} spot(s) in view`;
+          statusEl.textContent = `${shown.length} spot(s) in view${more}`;
         } else {
-          statusEl.textContent = `${shown.length} of ${currentSpots.length} spot(s) shown (filtered)`;
+          statusEl.textContent = `${shown.length} of ${currentSpots.length} spot(s) shown (filtered)${more}`;
         }
       }
       filterQualityEl.addEventListener('change', renderSpots);
@@ -412,12 +421,27 @@
           const r = radiusKm();
           // Authed reads also return viewer fields (my_rating) for prefills.
           const token = getToken();
-          const res = await fetch(`/api/spots/area?lat=${c.lat}&lng=${c.lng}&radius_km=${r.toFixed(2)}`,
-            token ? { headers: { 'Authorization': 'Bearer ' + token } } : undefined);
-          if (my !== reqToken) return;
-          if (!res.ok) throw new Error('server returned ' + res.status);
-          const data = await res.json();
-          currentSpots = (data.results || []).map(s => ({
+          const opts = token ? { headers: { 'Authorization': 'Bearer ' + token } } : undefined;
+          // /api/spots/area is cursor-paginated: follow next_cursor so a dense
+          // viewport isn't silently cut off at one page. The page cap bounds a
+          // pathological zoomed-out view; truncation is surfaced in the status.
+          const MAX_PAGES = 5; // × 200/page = 1000 spots
+          const all = [];
+          let cursor = '';
+          let pages = 0;
+          do {
+            const url = `/api/spots/area?lat=${c.lat}&lng=${c.lng}&radius_km=${r.toFixed(2)}`
+              + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : '');
+            const res = await fetch(url, opts);
+            if (my !== reqToken) return; // a newer pan/zoom superseded us
+            if (!res.ok) throw new Error('server returned ' + res.status);
+            const data = await res.json();
+            all.push(...(data.results || []));
+            cursor = data.next_cursor || '';
+            pages++;
+          } while (cursor && pages < MAX_PAGES);
+          viewTruncated = cursor !== '';
+          currentSpots = all.map(s => ({
             ...s,
             distance_km: distKm(c, { lat: s.lat, lng: s.lng }),
           })).sort((a, b) => a.distance_km - b.distance_km);
