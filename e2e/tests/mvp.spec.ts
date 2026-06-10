@@ -372,6 +372,99 @@ test("Web: another user reviews a spot (rating + speed); owner edits their own s
   expect(after.down_mbps).toBe(200);
 });
 
+test("React app: rate own spot and edit it inline", async ({ page }) => {
+  const username = uniqueUser();
+
+  await page.goto("/");
+  await page.getByTestId("auth-username").fill(username);
+  await page.getByTestId("auth-email").fill(EMAIL);
+  await page.getByTestId("auth-password").fill(PASSWORD);
+  await page.getByTestId("auth-submit").click();
+  await expect(page.getByTestId("user-badge")).toHaveText(username);
+
+  await page.getByTestId("add-tab").click();
+  await page.getByTestId("add-venue").fill("Parity Café");
+  await page.getByTestId("add-essid").fill("Parity-Guest");
+  await page.getByTestId("add-password").fill("beans1234");
+  await page.getByTestId("add-submit").click();
+  await expect(page.getByTestId("add-status")).toContainText("Saved");
+
+  await page.getByTestId("nearby-tab").click();
+  await page.getByTestId("locate-btn").click();
+  const card = page.getByTestId("spot-card").filter({ hasText: "Parity Café" });
+  await expect(card).toBeVisible();
+
+  // Rate the spot ★★★ with a speed test.
+  await card.getByTestId("spot-rate").click();
+  await card.getByTestId("rate-quality").selectOption("3");
+  await card.getByTestId("rate-down").fill("120");
+  await card.getByTestId("rate-save").click();
+  await expect(card.getByTestId("spot-quality")).toHaveText("★★★");
+  await expect(card.getByTestId("spot-ratings-count")).toHaveText("(1)");
+  await expect(card.getByTestId("spot-speed")).toContainText("120");
+
+  // Edit the venue name (facts-only form on own spots).
+  await card.getByTestId("spot-edit").click();
+  await card.getByTestId("edit-venue").fill("Parity Café Renamed");
+  await card.getByTestId("edit-save").click();
+  await expect(
+    page.getByTestId("spot-card").filter({ hasText: "Parity Café Renamed" }),
+  ).toBeVisible();
+});
+
+test("Email verification page + admin reports authz", async ({ page, request }) => {
+  // A bad verification token is rejected on the API and surfaced on the page.
+  const bad = await request.post(`${BACKEND}/api/auth/verify-email`, {
+    data: { token: "not-a-real-token" },
+  });
+  expect(bad.status()).toBe(400);
+
+  await page.goto(`${BACKEND}/verify?token=not-a-real-token`);
+  await expect(page.getByTestId("verify-error")).toContainText("invalid or has expired");
+
+  // /api/reports: 401 anonymous, 403 for a regular (non-admin) user.
+  expect((await request.get(`${BACKEND}/api/reports`)).status()).toBe(401);
+  const reg = await request.post(`${BACKEND}/api/auth/register`, {
+    data: { username: uniqueUser(), email: EMAIL, password: PASSWORD },
+  });
+  const token = (await reg.json()).token as string;
+  const asUser = await request.get(`${BACKEND}/api/reports`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect(asUser.status()).toBe(403);
+});
+
+test("Share page: logged-in user rates from a shared link", async ({ page, request, context }) => {
+  await context.grantPermissions(["geolocation"]);
+  const owner = uniqueUser();
+  const ownerReg = await request.post(`${BACKEND}/api/auth/register`, {
+    data: { username: owner, email: EMAIL, password: PASSWORD },
+  });
+  const ownerTok = (await ownerReg.json()).token as string;
+  const created = await request.post(`${BACKEND}/api/spots`, {
+    headers: { Authorization: `Bearer ${ownerTok}` },
+    data: { venue_name: "Shared Café", essid: "Shared-Guest", auth_type: "wpa2", lat: 41.4, lng: 2.19, quality: 1 },
+  });
+  const spotId = (await created.json()).id as string;
+
+  const rater = uniqueUser();
+  const raterReg = await request.post(`${BACKEND}/api/auth/register`, {
+    data: { username: rater, email: EMAIL, password: PASSWORD },
+  });
+  const raterTok = (await raterReg.json()).token as string;
+
+  await page.goto(`${BACKEND}/s/${spotId}`);
+  await page.evaluate((t) => localStorage.setItem("owpm_token", t), raterTok);
+  await page.getByTestId("share-rate").click();
+  await page.getByTestId("share-rate-quality").selectOption("3");
+  await page.getByTestId("share-rate-down").fill("90");
+  await page.getByTestId("share-rate-save").click();
+  await expect(page.getByTestId("share-rate-done")).toBeVisible();
+
+  // After the auto-reload the server-rendered stars show the new average.
+  await expect(page.getByTestId("quality")).toHaveText("★★☆", { timeout: 10_000 });
+});
+
 test("Password reset: email required to register, forgot is non-enumerating, bad token rejected", async ({
   request,
 }) => {
