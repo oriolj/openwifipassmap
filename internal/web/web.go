@@ -6,6 +6,7 @@ package web
 
 import (
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
@@ -28,9 +29,10 @@ type Web struct {
 // New parses templates and returns a Web.
 func New(s *store.Store) (*Web, error) {
 	t, err := template.New("").Funcs(template.FuncMap{
-		"humanizeAgo":  humanizeAgo,
-		"qualityStars": qualityStars,
-		"qualityColor": qualityColor,
+		"humanizeAgo":      humanizeAgo,
+		"qualityStars":     qualityStars,
+		"qualityColor":     qualityColor,
+		"qualityPaletteJS": qualityPaletteJS,
 	}).ParseFS(tmplFS, "templates/*.html")
 	if err != nil {
 		return nil, err
@@ -69,18 +71,24 @@ func qualityStars(q int) string {
 	return strings.Repeat("★", q) + strings.Repeat("☆", 3-q)
 }
 
-// qualityColor maps a quality rating to the same palette the map pins use.
+// qualityColors is the single source of truth for the quality palette, shared
+// by the server-rendered share page (qualityColor) and the landing-page client
+// JS (qualityPaletteJS) so the two never drift. 0=unrated, 1=basic … 3=great.
+var qualityColors = map[int]string{0: "#9ca3af", 1: "#dc2626", 2: "#f59e0b", 3: "#16a34a"}
+
+// qualityColor maps a quality rating to its pin/badge colour.
 func qualityColor(q int) string {
-	switch q {
-	case 3:
-		return "#16a34a"
-	case 2:
-		return "#f59e0b"
-	case 1:
-		return "#dc2626"
-	default:
-		return "#9ca3af"
+	if c, ok := qualityColors[q]; ok {
+		return c
 	}
+	return qualityColors[0]
+}
+
+// qualityPaletteJS renders qualityColors as a JS object literal for the landing
+// template, keeping the client palette in lock-step with the server's.
+func qualityPaletteJS() template.JS {
+	b, _ := json.Marshal(qualityColors)
+	return template.JS(b)
 }
 
 // Routes registers the public web routes.

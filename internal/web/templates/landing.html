@@ -168,7 +168,9 @@
     }
 
     // ---- Connection quality (manual 1-3 rating) + speed presentation ----
-    const QUALITY_COLOR = { 0: '#9ca3af', 1: '#dc2626', 2: '#f59e0b', 3: '#16a34a' };
+    // Palette is injected from Go (web.qualityColors) so the client pins and the
+    // server-rendered share page never drift apart.
+    const QUALITY_COLOR = {{qualityPaletteJS}};
     function qualityColor(q) { return QUALITY_COLOR[q] || QUALITY_COLOR[0]; }
 
     // Coloured star rating (★★☆); null for unrated so callers can skip it.
@@ -294,18 +296,15 @@
       // Quality (min stars) + speed (min ↓ Mbps) filters, read from the selects.
       const filterQualityEl = document.getElementById('filter-quality');
       const filterSpeedEl = document.getElementById('filter-speed');
-      function passesFilter(s) {
-        const minQ = parseInt(filterQualityEl.value, 10) || 0;
-        const minDown = parseFloat(filterSpeedEl.value) || 0;
-        if ((s.quality || 0) < minQ) return false;
-        if (minDown > 0 && (s.down_mbps == null || s.down_mbps < minDown)) return false;
-        return true;
-      }
 
       // Redraw markers + list from currentSpots through the active filters. The
       // map is a viewport, so filtering the in-view set is the right semantics.
       function renderSpots() {
-        const shown = currentSpots.filter(passesFilter);
+        const minQ = parseInt(filterQualityEl.value, 10) || 0;
+        const minDown = parseFloat(filterSpeedEl.value) || 0;
+        const shown = currentSpots.filter((s) =>
+          (s.quality || 0) >= minQ &&
+          (minDown === 0 || (s.down_mbps != null && s.down_mbps >= minDown)));
         markerLayer.clearLayers();
         for (const s of shown) {
           L.circleMarker([s.lat, s.lng], {
