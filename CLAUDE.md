@@ -37,7 +37,8 @@ only hashed secret in the system is a user's *account login password*
 | `cmd/server` | backend entrypoint (wires API + web, migrates, serves) |
 | `cmd/wifispot` | CLI entrypoint (sync/nearby/scan/connect) |
 | `internal/api` | JSON API handlers, auth middleware, pagination |
-| `internal/web` | server-rendered public site (`templates/*.html` embedded) |
+| `internal/web` | server-rendered public site (`templates/*.html` embedded; PWA + offline pack, see `docs/pwa-offline.md`) |
+| `web/` | asset build: Tailwind+DaisyUI → `internal/web/static/app.css`, vendored leaflet, icons, sw.js (`make css`; output gitignored) |
 | `internal/store` | server SQLite layer (users, sessions, spots, reports) |
 | `internal/cache` | CLI's offline SQLite cache (spots only, no FKs) |
 | `internal/geo` | haversine, bounding box, geohash (shared) |

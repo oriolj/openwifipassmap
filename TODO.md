@@ -37,7 +37,7 @@ Loose backlog of things worth doing. Not prioritized, except the last step.
 - [x] **Email verification on signup.** Verification link at register (48 h
   TTL, `/verify` page); accounts work immediately but forgot-password only
   emails verified addresses; backfilled accounts marked verified.
-- [ ] Resend-verification action for users who lost the signup email.
+- [x] Resend-verification action (account settings → "Resend verification email").
 - [ ] Catch mail locally with **Mailpit** during dev (currently the dev fallback
   just logs the message; wiring SMTP→Mailpit would let us see rendered mail).
 - [x] Rate-limit register / login / forgot-password / reset (per-IP token

@@ -424,6 +424,12 @@ test("Email verification page + admin reports authz", async ({ page, request }) 
 
   // /api/reports: 401 anonymous, 403 for a regular (non-admin) user.
   expect((await request.get(`${BACKEND}/api/reports`)).status()).toBe(401);
+  // The first-ever account becomes admin (operator bootstrap); burn one so the
+  // subject below is guaranteed to be a regular user even when this test runs
+  // alone against a fresh DB.
+  await request.post(`${BACKEND}/api/auth/register`, {
+    data: { username: `seed_${uniqueUser()}`, email: EMAIL, password: PASSWORD },
+  });
   const reg = await request.post(`${BACKEND}/api/auth/register`, {
     data: { username: uniqueUser(), email: EMAIL, password: PASSWORD },
   });
@@ -432,6 +438,12 @@ test("Email verification page + admin reports authz", async ({ page, request }) 
     headers: { Authorization: `Bearer ${token}` },
   });
   expect(asUser.status()).toBe(403);
+
+  // The /admin console denies non-admins at the page level too.
+  await page.goto(`${BACKEND}/admin`);
+  await page.evaluate((t) => localStorage.setItem("owpm_token", t), token);
+  await page.reload();
+  await expect(page.getByTestId("admin-denied")).toBeVisible();
 });
 
 test("Share page: logged-in user rates from a shared link", async ({ page, request, context }) => {
@@ -463,6 +475,109 @@ test("Share page: logged-in user rates from a shared link", async ({ page, reque
 
   // After the auto-reload the server-rendered stars show the new average.
   await expect(page.getByTestId("quality")).toHaveText("★★☆", { timeout: 10_000 });
+});
+
+test("Account settings: change password + email; My WiFis list with delete", async ({
+  page,
+  request,
+  context,
+}) => {
+  await context.grantPermissions(["geolocation"]);
+  const username = uniqueUser();
+  const reg = await request.post(`${BACKEND}/api/auth/register`, {
+    data: { username, email: EMAIL, password: PASSWORD },
+  });
+  const regJson = await reg.json();
+  const token = regJson.token as string;
+  await request.post(`${BACKEND}/api/spots`, {
+    headers: { Authorization: `Bearer ${token}` },
+    data: { venue_name: "Mine Café", essid: "Mine-Guest", auth_type: "wpa2", lat: 41.5, lng: 2.3, quality: 2 },
+  });
+
+  await page.goto(`${BACKEND}/?lat=41.5&lng=2.3&zoom=15`);
+  await page.evaluate(
+    ([t, u, id]) => {
+      localStorage.setItem("owpm_token", t);
+      localStorage.setItem("owpm_user", u);
+      localStorage.setItem("owpm_user_id", id);
+    },
+    [token, username, regJson.user.id],
+  );
+  await page.reload();
+
+  // My WiFis: row appears, delete removes it.
+  await page.getByTestId("account-button").click();
+  await page.getByTestId("open-myspots").click();
+  const row = page.getByTestId("myspot").filter({ hasText: "Mine Café" });
+  await expect(row).toBeVisible();
+  page.once("dialog", (d) => d.accept());
+  await row.getByTestId("myspot-delete").click();
+  await expect(page.getByTestId("myspots-status")).toContainText("haven’t added any WiFi yet");
+  await page.locator("#myspots-close").click();
+
+  // Settings: change the password.
+  const NEWPW = "espresso999";
+  await page.getByTestId("account-button").click();
+  await page.getByTestId("open-settings").click();
+  await expect(page.getByTestId("settings-email")).toContainText(EMAIL);
+  await page.getByTestId("pw-current").fill(PASSWORD);
+  await page.getByTestId("pw-new").fill(NEWPW);
+  await page.getByTestId("pw-save").click();
+  await expect(page.getByTestId("toast")).toContainText("Password updated");
+
+  // Old password dead, new one works.
+  const oldLogin = await request.post(`${BACKEND}/api/auth/login`, {
+    data: { username, password: PASSWORD },
+  });
+  expect(oldLogin.status()).toBe(401);
+  const newLogin = await request.post(`${BACKEND}/api/auth/login`, {
+    data: { username, password: NEWPW },
+  });
+  expect(newLogin.status()).toBe(200);
+
+  // Change email (confirmed with the NEW password) → unverified again.
+  await page.getByTestId("account-button").click();
+  await page.getByTestId("open-settings").click();
+  await page.getByTestId("email-new").fill("changed@example.com");
+  await page.getByTestId("email-password").fill(NEWPW);
+  await page.getByTestId("email-save").click();
+  await expect(page.getByTestId("toast")).toContainText("Email updated");
+
+  const me = await (
+    await request.get(`${BACKEND}/api/me`, { headers: { Authorization: `Bearer ${token}` } })
+  ).json();
+  expect(me.user.email).toBe("changed@example.com");
+  expect(me.user.email_verified).toBe(false);
+});
+
+test("SEO: canonical + OG + JSON-LD on share pages, sitemap and robots", async ({ request }) => {
+  const reg = await request.post(`${BACKEND}/api/auth/register`, {
+    data: { username: uniqueUser(), email: EMAIL, password: PASSWORD },
+  });
+  const token = (await reg.json()).token as string;
+  const created = await request.post(`${BACKEND}/api/spots`, {
+    headers: { Authorization: `Bearer ${token}` },
+    data: { venue_name: "SEO Café", essid: "SEO-Guest", auth_type: "wpa2", lat: 41.42, lng: 2.2, quality: 2, down_mbps: 50 },
+  });
+  const spotId = (await created.json()).id as string;
+
+  const page = await request.get(`${BACKEND}/s/${spotId}`);
+  expect(page.ok()).toBeTruthy();
+  const html = await page.text();
+  const canonical = `${BACKEND}/s/${spotId}`;
+  expect(html).toContain(`<link rel="canonical" href="${canonical}" />`);
+  expect(html).toContain(`<meta property="og:url" content="${canonical}" />`);
+  expect(html).toContain('application/ld+json');
+  expect(html).toContain('Free WiFi');
+  expect(html).toContain('geo.position');
+
+  const sitemap = await request.get(`${BACKEND}/sitemap.xml`);
+  expect(sitemap.ok()).toBeTruthy();
+  expect(await sitemap.text()).toContain(`/s/${spotId}`);
+
+  const robots = await request.get(`${BACKEND}/robots.txt`);
+  expect(robots.ok()).toBeTruthy();
+  expect(await robots.text()).toContain("Sitemap: ");
 });
 
 test("Password reset: email required to register, forgot is non-enumerating, bad token rejected", async ({
