@@ -96,6 +96,13 @@ func (web *Web) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /{$}", web.landing) // exact "/" only
 	mux.HandleFunc("GET /s/{id}", web.share)
 	mux.HandleFunc("GET /reset", web.reset)
+	mux.HandleFunc("GET /verify", web.verify)
+}
+
+// verify renders the email-verification landing page for a signup magic link;
+// the page POSTs the token to /api/auth/verify-email on load.
+func (web *Web) verify(w http.ResponseWriter, r *http.Request) {
+	web.render(w, "verify.html", struct{ Token string }{Token: r.URL.Query().Get("token")})
 }
 
 func (web *Web) landing(w http.ResponseWriter, r *http.Request) {

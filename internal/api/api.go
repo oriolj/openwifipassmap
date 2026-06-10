@@ -28,11 +28,13 @@ import (
 
 const (
 	sessionTTL       = 30 * 24 * time.Hour
-	passwordResetTTL = time.Hour // magic-link lifetime
-	nearbyMaxRadius  = 50.0      // km — interactive
-	areaMaxRadius    = 300.0     // km — CLI bulk download
-	nearbyResultsCap = 200       // documented hard cap for the radius-bounded nearby list
-	areaPageSize     = 200       // cursor page size for area
+	passwordResetTTL = time.Hour      // magic-link lifetime
+	emailVerifyTTL   = 48 * time.Hour // verification-link lifetime
+	nearbyMaxRadius  = 50.0           // km — interactive
+	areaMaxRadius    = 300.0          // km — CLI bulk download
+	nearbyResultsCap = 200            // documented hard cap for the radius-bounded nearby list
+	areaPageSize     = 200            // cursor page size for area
+	reportsCap       = 500            // admin reports list cap (total returned alongside)
 )
 
 type ctxKey int
@@ -76,13 +78,22 @@ func New(s *store.Store, allowCORS bool, log *slog.Logger, mailer email.Sender, 
 func (a *API) Routes(mux *http.ServeMux) {
 	h := func(f http.HandlerFunc) http.HandlerFunc { return a.withUser(f) }
 
+	// Abuse brakes on the credential endpoints: generous for interactive
+	// login/register (argon2 already makes guessing expensive), tight for
+	// forgot-password since every allowed request can send an email.
+	authRL := newRateLimiter(20, 2*time.Second)  // 20 burst, 30/min sustained
+	forgotRL := newRateLimiter(3, 5*time.Minute) // 3 burst, then 1 per 5 min
+	limited := func(rl *rateLimiter, f http.HandlerFunc) http.HandlerFunc { return a.rateLimit(rl, f) }
+
 	mux.HandleFunc("GET /api/health", a.health)
-	mux.HandleFunc("POST /api/auth/register", a.register)
-	mux.HandleFunc("POST /api/auth/login", a.login)
+	mux.HandleFunc("POST /api/auth/register", limited(authRL, a.register))
+	mux.HandleFunc("POST /api/auth/login", limited(authRL, a.login))
 	mux.HandleFunc("POST /api/auth/logout", h(a.logout))
-	mux.HandleFunc("POST /api/auth/forgot-password", a.forgotPassword)
-	mux.HandleFunc("POST /api/auth/reset-password", a.resetPassword)
+	mux.HandleFunc("POST /api/auth/forgot-password", limited(forgotRL, a.forgotPassword))
+	mux.HandleFunc("POST /api/auth/reset-password", limited(authRL, a.resetPassword))
+	mux.HandleFunc("POST /api/auth/verify-email", limited(authRL, a.verifyEmail))
 	mux.HandleFunc("GET /api/me", h(a.me))
+	mux.HandleFunc("GET /api/reports", h(a.listReports))
 
 	// Reads are anonymous but auth-aware: with a bearer token they also carry
 	// viewer-specific fields (confirmed_by_me, my_rating).
@@ -203,7 +214,35 @@ func (a *API) register(w http.ResponseWriter, r *http.Request) {
 		a.serverErr(w, err)
 		return
 	}
+	// Verification is non-blocking: the account works right away, but password
+	// reset only emails verified addresses, so the link matters.
+	if token, err := a.store.CreateEmailVerificationToken(r.Context(), u.ID, emailVerifyTTL); err != nil {
+		a.log.Error("create verification token", "err", err, "user", u.ID)
+	} else {
+		a.sendVerificationEmail(addr, u.Username, a.publicBase(r)+"/verify?token="+url.QueryEscape(token))
+	}
 	a.issueToken(r.Context(), w, u)
+}
+
+// verifyEmail consumes an email-verification token (from the signup email's
+// magic link) and marks the account's address verified.
+func (a *API) verifyEmail(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Token string `json:"token"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	_, err := a.store.ConsumeEmailVerificationToken(r.Context(), strings.TrimSpace(req.Token))
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusBadRequest, "this verification link is invalid or has expired")
+		return
+	}
+	if err != nil {
+		a.serverErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"message": "Email verified — thanks!"})
 }
 
 // normalizeEmail validates and canonicalizes an email address. It returns the
@@ -272,6 +311,28 @@ func (a *API) me(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"user": u, "spots_added": n})
 }
 
+// listReports returns the newest moderation reports (admin only). The response
+// carries total alongside results so a capped list is never a silent truncation.
+func (a *API) listReports(w http.ResponseWriter, r *http.Request) {
+	u, ok := a.requireUser(w, r)
+	if !ok {
+		return
+	}
+	if !u.IsAdmin {
+		writeErr(w, http.StatusForbidden, "admin only")
+		return
+	}
+	reports, total, err := a.store.ListReports(r.Context(), reportsCap)
+	if err != nil {
+		a.serverErr(w, err)
+		return
+	}
+	if reports == nil {
+		reports = []*models.Report{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"results": reports, "total": total})
+}
+
 // forgotPassword issues a password-reset magic link for every account under the
 // submitted email. It always returns 200 with a generic message — never
 // revealing whether the address has an account — so it can't be used to
@@ -297,6 +358,12 @@ func (a *API) forgotPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	base := a.publicBase(r)
 	for _, u := range users {
+		// Only verified addresses get reset mail: an attacker who registered
+		// someone else's email can't use the reset flow to land mail in (or
+		// take over via) an inbox that never confirmed the account.
+		if !u.EmailVerified {
+			continue
+		}
 		token, err := a.store.CreatePasswordResetToken(r.Context(), u.ID, passwordResetTTL)
 		if err != nil {
 			a.log.Error("create reset token", "err", err, "user", u.ID)
@@ -330,10 +397,19 @@ func (a *API) publicBase(r *http.Request) string {
 	return scheme + "://" + host
 }
 
-// sendResetEmail dispatches the magic-link email on a background goroutine so
-// the request returns immediately regardless of the mail provider's latency.
+// sendMailAsync dispatches an email on a background goroutine so the request
+// returns immediately regardless of the mail provider's latency.
+func (a *API) sendMailAsync(to, subject, html, text string) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := a.mailer.Send(ctx, to, subject, html, text); err != nil {
+			a.log.Error("send email", "err", err, "to", to, "subject", subject)
+		}
+	}()
+}
+
 func (a *API) sendResetEmail(to, username, link string) {
-	subject := "Reset your OpenWifiPassMap password"
 	text := fmt.Sprintf("Hi %s,\n\nWe got a request to reset your OpenWifiPassMap password. "+
 		"Open this link to choose a new one:\n\n%s\n\n"+
 		"This link expires in 1 hour. If you didn't ask for this, you can ignore this email.",
@@ -344,13 +420,20 @@ func (a *API) sendResetEmail(to, username, link string) {
 		`<p><a href="%s">Reset my password</a></p>`+
 		`<p>This link expires in 1 hour. If you didn't ask for this, you can ignore this email.</p>`,
 		template.HTMLEscapeString(username), template.HTMLEscapeString(link))
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		if err := a.mailer.Send(ctx, to, subject, html, text); err != nil {
-			a.log.Error("send reset email", "err", err, "to", to)
-		}
-	}()
+	a.sendMailAsync(to, "Reset your OpenWifiPassMap password", html, text)
+}
+
+func (a *API) sendVerificationEmail(to, username, link string) {
+	text := fmt.Sprintf("Hi %s,\n\nWelcome to OpenWifiPassMap! Confirm this email address "+
+		"so you can recover your account later:\n\n%s\n\n"+
+		"This link expires in 48 hours. If you didn't create this account, you can ignore this email.",
+		username, link)
+	html := fmt.Sprintf(`<p>Hi %s,</p>`+
+		`<p>Welcome to OpenWifiPassMap! Confirm this email address so you can recover your account later:</p>`+
+		`<p><a href="%s">Verify my email</a></p>`+
+		`<p>This link expires in 48 hours. If you didn't create this account, you can ignore this email.</p>`,
+		template.HTMLEscapeString(username), template.HTMLEscapeString(link))
+	a.sendMailAsync(to, "Verify your OpenWifiPassMap email", html, text)
 }
 
 // resetPassword consumes a single-use reset token and sets a new password,

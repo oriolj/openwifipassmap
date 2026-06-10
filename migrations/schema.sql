@@ -2,13 +2,14 @@
 -- Timestamps are unix milliseconds (INTEGER).
 
 CREATE TABLE IF NOT EXISTS users (
-    id            TEXT PRIMARY KEY,
-    username      TEXT NOT NULL UNIQUE COLLATE NOCASE,
-    email         TEXT NOT NULL DEFAULT '' COLLATE NOCASE,
-    password_hash TEXT NOT NULL,
-    is_admin      INTEGER NOT NULL DEFAULT 0,
-    created_at    INTEGER NOT NULL,
-    updated_at    INTEGER NOT NULL
+    id             TEXT PRIMARY KEY,
+    username       TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    email          TEXT NOT NULL DEFAULT '' COLLATE NOCASE,
+    email_verified INTEGER NOT NULL DEFAULT 0,
+    password_hash  TEXT NOT NULL,
+    is_admin       INTEGER NOT NULL DEFAULT 0,
+    created_at     INTEGER NOT NULL,
+    updated_at     INTEGER NOT NULL
 );
 -- Note: email is intentionally NOT UNIQUE — one person may own several accounts
 -- under one address, and the backfill of pre-email accounts deliberately shares
@@ -24,6 +25,15 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
     expires_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_prt_user ON password_reset_tokens(user_id);
+
+-- Same shape for the email-verification links sent at signup.
+CREATE TABLE IF NOT EXISTS email_verification_tokens (
+    token      TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_evt_user ON email_verification_tokens(user_id);
 
 CREATE TABLE IF NOT EXISTS sessions (
     token      TEXT PRIMARY KEY,

@@ -12,13 +12,14 @@ import (
 // User is a contributor. Browsing is anonymous; an account is only needed to
 // add/edit/delete spots.
 type User struct {
-	ID           string `json:"id"`
-	Username     string `json:"username"`
-	Email        string `json:"email"`
-	PasswordHash string `json:"-"`
-	IsAdmin      bool   `json:"is_admin"`
-	CreatedAt    int64  `json:"created_at"`
-	UpdatedAt    int64  `json:"updated_at"`
+	ID            string `json:"id"`
+	Username      string `json:"username"`
+	Email         string `json:"email"`
+	EmailVerified bool   `json:"email_verified"`
+	PasswordHash  string `json:"-"`
+	IsAdmin       bool   `json:"is_admin"`
+	CreatedAt     int64  `json:"created_at"`
+	UpdatedAt     int64  `json:"updated_at"`
 }
 
 // Session is an opaque bearer token tied to a user.
@@ -81,6 +82,10 @@ type Report struct {
 	Reason         string `json:"reason"` // wrong_password | gone | spam | other
 	ReporterUserID string `json:"reporter_user_id,omitempty"`
 	CreatedAt      int64  `json:"created_at"`
+
+	// Spot context, populated by the admin listing (not stored on the row).
+	SpotESSID     string `json:"spot_essid,omitempty"`
+	SpotVenueName string `json:"spot_venue_name,omitempty"`
 }
 
 // ValidAuthTypes is the allowed set for Spot.AuthType.

@@ -224,6 +224,78 @@ func TestReviewAggregates(t *testing.T) {
 	}
 }
 
+func TestEmailVerification(t *testing.T) {
+	s, ctx := openTestStore(t)
+	u, _ := s.CreateUser(ctx, "verifyme", "v@example.com", "h")
+
+	got, _ := s.GetUserByID(ctx, u.ID)
+	if got.EmailVerified {
+		t.Fatal("new accounts must start unverified")
+	}
+
+	token, err := s.CreateEmailVerificationToken(ctx, u.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+	uid, err := s.ConsumeEmailVerificationToken(ctx, token)
+	if err != nil || uid != u.ID {
+		t.Fatalf("consume = (%q, %v), want (%q, nil)", uid, err, u.ID)
+	}
+	got, _ = s.GetUserByID(ctx, u.ID)
+	if !got.EmailVerified {
+		t.Error("email_verified should be set after consuming the token")
+	}
+	// Single use.
+	if _, err := s.ConsumeEmailVerificationToken(ctx, token); !errors.Is(err, ErrNotFound) {
+		t.Errorf("second consume err = %v, want ErrNotFound", err)
+	}
+
+	// Backfill marks the operator's address verified.
+	legacy, _ := s.CreateUser(ctx, "legacy2", "", "h")
+	if err := s.EnsureUserEmail(ctx, "op@example.com"); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	got, _ = s.GetUserByID(ctx, legacy.ID)
+	if got.Email != "op@example.com" || !got.EmailVerified {
+		t.Errorf("backfilled = (%q, verified=%v), want (op@example.com, true)", got.Email, got.EmailVerified)
+	}
+}
+
+func TestListReports(t *testing.T) {
+	s, ctx := openTestStore(t)
+	u, _ := s.CreateUser(ctx, "reporter", "r@example.com", "h")
+	sp, _ := s.CreateSpot(ctx, &models.Spot{
+		ESSID: "Sketchy", VenueName: "Dive Bar", AuthType: "wpa2",
+		Lat: 41, Lng: 2, CreatedBy: u.ID,
+	})
+	if _, err := s.CreateReport(ctx, sp.ID, "wrong_password", u.ID); err != nil {
+		t.Fatalf("create report: %v", err)
+	}
+	if _, err := s.CreateReport(ctx, sp.ID, "spam", ""); err != nil {
+		t.Fatalf("create anon report: %v", err)
+	}
+
+	reports, total, err := s.ListReports(ctx, 10)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if total != 2 || len(reports) != 2 {
+		t.Fatalf("got %d/%d reports, want 2/2", len(reports), total)
+	}
+	if reports[0].SpotESSID != "Sketchy" || reports[0].SpotVenueName != "Dive Bar" {
+		t.Errorf("spot context = %q/%q, want Sketchy/Dive Bar", reports[0].SpotESSID, reports[0].SpotVenueName)
+	}
+
+	// Cap is visible, not silent: limit 1 still reports total 2.
+	capped, total, err := s.ListReports(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(capped) != 1 || total != 2 {
+		t.Errorf("capped list = %d items/total %d, want 1/2", len(capped), total)
+	}
+}
+
 func TestDeleteUserSessions(t *testing.T) {
 	s, ctx := openTestStore(t)
 	u, err := s.CreateUser(ctx, "sess", "s@example.com", "h")

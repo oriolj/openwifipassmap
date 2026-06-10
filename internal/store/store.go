@@ -97,11 +97,15 @@ func (s *Store) ensureColumn(ctx context.Context, table, column, columnDDL strin
 }
 
 // EnsureUserEmail brings a pre-existing database up to the email-bearing users
-// schema: it adds the users.email column when missing and backfills any account
-// that predates the column with the given address. Fresh databases already have
-// the column from schema.sql and only the (no-op) backfill runs. Idempotent.
+// schema: it adds the users.email and email_verified columns when missing and
+// backfills any account that predates them with the given address. Fresh
+// databases already have the columns from schema.sql and only the (no-op)
+// backfill runs. Idempotent.
 func (s *Store) EnsureUserEmail(ctx context.Context, backfill string) error {
 	if err := s.ensureColumn(ctx, "users", "email", `email TEXT NOT NULL DEFAULT '' COLLATE NOCASE`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "users", "email_verified", `email_verified INTEGER NOT NULL DEFAULT 0`); err != nil {
 		return err
 	}
 	// Index lives here (not schema.sql) so it's created only once the column is
@@ -112,9 +116,11 @@ func (s *Store) EnsureUserEmail(ctx context.Context, backfill string) error {
 	}
 	if backfill != "" {
 		// Only blank emails — i.e. rows that existed before the column — are
-		// touched; real registrations always write a non-empty address.
+		// touched; real registrations always write a non-empty address. The
+		// backfill address is the operator's own, so mark it verified or the
+		// pre-existing accounts could never use password reset.
 		if _, err := s.db.ExecContext(ctx,
-			`UPDATE users SET email = ?, updated_at = ? WHERE email = ''`, backfill, nowMS()); err != nil {
+			`UPDATE users SET email = ?, email_verified = 1, updated_at = ? WHERE email = ''`, backfill, nowMS()); err != nil {
 			return err
 		}
 	}
@@ -136,13 +142,13 @@ var ErrUsernameTaken = errors.New("store: username already taken")
 
 // userColumns is the canonical SELECT column order for a user row, kept in
 // lock-step with scanUserRow.
-const userColumns = `id, username, email, password_hash, is_admin, created_at, updated_at`
+const userColumns = `id, username, email, email_verified, password_hash, is_admin, created_at, updated_at`
 
 // scanUserRow reads one user row in userColumns order, translating
 // sql.ErrNoRows to ErrNotFound. Works for both *sql.Row and *sql.Rows.
 func scanUserRow(sc models.Scanner) (*models.User, error) {
 	var u models.User
-	err := sc.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.IsAdmin, &u.CreatedAt, &u.UpdatedAt)
+	err := sc.Scan(&u.ID, &u.Username, &u.Email, &u.EmailVerified, &u.PasswordHash, &u.IsAdmin, &u.CreatedAt, &u.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -248,7 +254,7 @@ func (s *Store) CreateSession(ctx context.Context, userID string, ttl time.Durat
 // UserForToken returns the user owning a non-expired session token.
 func (s *Store) UserForToken(ctx context.Context, token string) (*models.User, error) {
 	return scanUserRow(s.db.QueryRowContext(ctx,
-		`SELECT u.id, u.username, u.email, u.password_hash, u.is_admin, u.created_at, u.updated_at
+		`SELECT u.id, u.username, u.email, u.email_verified, u.password_hash, u.is_admin, u.created_at, u.updated_at
 		 FROM sessions s JOIN users u ON u.id = s.user_id
 		 WHERE s.token = ? AND s.expires_at > ?`, token, nowMS()))
 }
@@ -297,6 +303,40 @@ func (s *Store) ConsumePasswordResetToken(ctx context.Context, token string) (st
 		return "", err
 	}
 	return userID, nil
+}
+
+// ---- Email verification tokens ----
+
+// CreateEmailVerificationToken issues a single-use verification token for
+// userID, valid for ttl. Returns the raw token for the verification link.
+func (s *Store) CreateEmailVerificationToken(ctx context.Context, userID string, ttl time.Duration) (string, error) {
+	token := models.NewToken()
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO email_verification_tokens (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)`,
+		token, userID, nowMS(), time.Now().Add(ttl).UnixMilli())
+	if err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+// ConsumeEmailVerificationToken burns a verification token and marks its
+// user's email verified, returning the user id. ErrNotFound when the token is
+// unknown or expired.
+func (s *Store) ConsumeEmailVerificationToken(ctx context.Context, token string) (string, error) {
+	var userID string
+	err := s.db.QueryRowContext(ctx,
+		`DELETE FROM email_verification_tokens WHERE token = ? AND expires_at > ? RETURNING user_id`,
+		token, nowMS()).Scan(&userID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	_, err = s.db.ExecContext(ctx,
+		`UPDATE users SET email_verified = 1, updated_at = ? WHERE id = ?`, nowMS(), userID)
+	return userID, err
 }
 
 // ---- Spots ----
@@ -658,9 +698,9 @@ func (s *Store) UpsertReview(ctx context.Context, spotID, userID string, quality
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE spots SET
 		   quality   = COALESCE((SELECT CAST(ROUND(AVG(quality)) AS INTEGER) FROM reviews WHERE spot_id = ?1 AND quality > 0), 0),
-		   down_mbps = (SELECT down_mbps FROM reviews WHERE spot_id = ?1 AND down_mbps IS NOT NULL ORDER BY updated_at DESC LIMIT 1),
-		   up_mbps   = (SELECT up_mbps   FROM reviews WHERE spot_id = ?1 AND up_mbps   IS NOT NULL ORDER BY updated_at DESC LIMIT 1),
-		   ping_ms   = (SELECT ping_ms   FROM reviews WHERE spot_id = ?1 AND ping_ms   IS NOT NULL ORDER BY updated_at DESC LIMIT 1),
+		   down_mbps = (SELECT down_mbps FROM reviews WHERE spot_id = ?1 AND down_mbps IS NOT NULL ORDER BY updated_at DESC, rowid DESC LIMIT 1),
+		   up_mbps   = (SELECT up_mbps   FROM reviews WHERE spot_id = ?1 AND up_mbps   IS NOT NULL ORDER BY updated_at DESC, rowid DESC LIMIT 1),
+		   ping_ms   = (SELECT ping_ms   FROM reviews WHERE spot_id = ?1 AND ping_ms   IS NOT NULL ORDER BY updated_at DESC, rowid DESC LIMIT 1),
 		   updated_at = ?2
 		 WHERE id = ?1`,
 		spotID, now); err != nil {
@@ -681,6 +721,36 @@ func (s *Store) EnsureReviews(ctx context.Context) error {
 		 WHERE (quality > 0 OR down_mbps IS NOT NULL OR up_mbps IS NOT NULL OR ping_ms IS NOT NULL)
 		   AND NOT EXISTS (SELECT 1 FROM reviews r WHERE r.spot_id = spots.id)`)
 	return err
+}
+
+// ListReports returns the newest moderation reports with spot context, capped
+// at limit, plus the total count so callers can surface truncation explicitly
+// (never silently). Reports whose spot was deleted are cascade-removed, so the
+// join is always satisfiable.
+func (s *Store) ListReports(ctx context.Context, limit int) ([]*models.Report, int, error) {
+	var total int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM reports`).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT r.id, r.spot_id, r.reason, COALESCE(r.reporter_user_id, ''), r.created_at,
+		        s.essid, s.venue_name
+		 FROM reports r JOIN spots s ON s.id = r.spot_id
+		 ORDER BY r.created_at DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var out []*models.Report
+	for rows.Next() {
+		var rep models.Report
+		if err := rows.Scan(&rep.ID, &rep.SpotID, &rep.Reason, &rep.ReporterUserID,
+			&rep.CreatedAt, &rep.SpotESSID, &rep.SpotVenueName); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, &rep)
+	}
+	return out, total, rows.Err()
 }
 
 // CreateReport inserts a moderation report.
