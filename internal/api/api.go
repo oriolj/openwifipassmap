@@ -83,6 +83,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 	// forgot-password since every allowed request can send an email.
 	authRL := newRateLimiter(20, 2*time.Second)  // 20 burst, 30/min sustained
 	forgotRL := newRateLimiter(3, 5*time.Minute) // 3 burst, then 1 per 5 min
+	resendRL := newRateLimiter(3, 5*time.Minute) // own bucket, also sends mail
 	limited := func(rl *rateLimiter, f http.HandlerFunc) http.HandlerFunc { return a.rateLimit(rl, f) }
 
 	mux.HandleFunc("GET /api/health", a.health)
@@ -92,8 +93,13 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/auth/forgot-password", limited(forgotRL, a.forgotPassword))
 	mux.HandleFunc("POST /api/auth/reset-password", limited(authRL, a.resetPassword))
 	mux.HandleFunc("POST /api/auth/verify-email", limited(authRL, a.verifyEmail))
+	mux.HandleFunc("POST /api/auth/resend-verification", limited(resendRL, h(a.resendVerification)))
 	mux.HandleFunc("GET /api/me", h(a.me))
+	mux.HandleFunc("GET /api/me/spots", h(a.mySpots))
+	mux.HandleFunc("POST /api/me/password", limited(authRL, h(a.changePassword)))
+	mux.HandleFunc("POST /api/me/email", limited(authRL, h(a.changeEmail)))
 	mux.HandleFunc("GET /api/reports", h(a.listReports))
+	mux.HandleFunc("DELETE /api/reports/{id}", h(a.deleteReport))
 
 	// Reads are anonymous but auth-aware: with a bearer token they also carry
 	// viewer-specific fields (confirmed_by_me, my_rating).
@@ -331,6 +337,138 @@ func (a *API) listReports(w http.ResponseWriter, r *http.Request) {
 		reports = []*models.Report{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"results": reports, "total": total})
+}
+
+// mySpots lists the authed user's own spots, cursor-paginated like area.
+func (a *API) mySpots(w http.ResponseWriter, r *http.Request) {
+	u, ok := a.requireUser(w, r)
+	if !ok {
+		return
+	}
+	spots, next, err := a.store.SpotsByUser(r.Context(), u.ID, r.URL.Query().Get("cursor"), areaPageSize)
+	if err != nil {
+		a.serverErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"results":     nonNil(spots),
+		"next_cursor": next,
+	})
+}
+
+// changePassword sets a new password for the authed user after re-verifying
+// the current one, then logs out every OTHER session (devices with a possibly
+// compromised credential) while keeping this one alive.
+func (a *API) changePassword(w http.ResponseWriter, r *http.Request) {
+	u, ok := a.requireUser(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if len(req.NewPassword) < 8 {
+		writeErr(w, http.StatusBadRequest, "new password must be ≥8 chars")
+		return
+	}
+	if ok, err := auth.VerifyPassword(req.CurrentPassword, u.PasswordHash); err != nil || !ok {
+		writeErr(w, http.StatusForbidden, "current password is incorrect")
+		return
+	}
+	hash, err := auth.HashPassword(req.NewPassword)
+	if err != nil {
+		a.serverErr(w, err)
+		return
+	}
+	if err := a.store.UpdateUserPassword(r.Context(), u.ID, hash); err != nil {
+		a.serverErr(w, err)
+		return
+	}
+	if err := a.store.DeleteUserSessionsExcept(r.Context(), u.ID, bearerToken(r)); err != nil {
+		a.log.Error("revoke other sessions", "err", err, "user", u.ID)
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"message": "Password updated. Other devices were logged out."})
+}
+
+// changeEmail sets a new address (password re-verified), resets the verified
+// flag, and sends a fresh verification link to the new address.
+func (a *API) changeEmail(w http.ResponseWriter, r *http.Request) {
+	u, ok := a.requireUser(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Password string `json:"password"`
+		Email    string `json:"email"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	addr, err := normalizeEmail(req.Email)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "a valid email address is required")
+		return
+	}
+	if ok, err := auth.VerifyPassword(req.Password, u.PasswordHash); err != nil || !ok {
+		writeErr(w, http.StatusForbidden, "password is incorrect")
+		return
+	}
+	if err := a.store.UpdateUserEmail(r.Context(), u.ID, addr); err != nil {
+		a.serverErr(w, err)
+		return
+	}
+	if token, err := a.store.CreateEmailVerificationToken(r.Context(), u.ID, emailVerifyTTL); err != nil {
+		a.log.Error("create verification token", "err", err, "user", u.ID)
+	} else {
+		a.sendVerificationEmail(addr, u.Username, a.publicBase(r)+"/verify?token="+url.QueryEscape(token))
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"message": "Email updated — check your inbox for the verification link."})
+}
+
+// resendVerification sends a fresh verification link for the authed user's
+// current (still unverified) address.
+func (a *API) resendVerification(w http.ResponseWriter, r *http.Request) {
+	u, ok := a.requireUser(w, r)
+	if !ok {
+		return
+	}
+	if u.EmailVerified {
+		writeErr(w, http.StatusBadRequest, "this email is already verified")
+		return
+	}
+	token, err := a.store.CreateEmailVerificationToken(r.Context(), u.ID, emailVerifyTTL)
+	if err != nil {
+		a.serverErr(w, err)
+		return
+	}
+	a.sendVerificationEmail(u.Email, u.Username, a.publicBase(r)+"/verify?token="+url.QueryEscape(token))
+	writeJSON(w, http.StatusOK, map[string]string{"message": "Verification email sent — check your inbox."})
+}
+
+// deleteReport dismisses a moderation report (admin only).
+func (a *API) deleteReport(w http.ResponseWriter, r *http.Request) {
+	u, ok := a.requireUser(w, r)
+	if !ok {
+		return
+	}
+	if !u.IsAdmin {
+		writeErr(w, http.StatusForbidden, "admin only")
+		return
+	}
+	err := a.store.DeleteReport(r.Context(), r.PathValue("id"))
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "report not found")
+		return
+	}
+	if err != nil {
+		a.serverErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // forgotPassword issues a password-reset magic link for every account under the

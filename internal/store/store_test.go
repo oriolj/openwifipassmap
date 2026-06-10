@@ -261,6 +261,65 @@ func TestEmailVerification(t *testing.T) {
 	}
 }
 
+func TestAdminBootstrap(t *testing.T) {
+	s, ctx := openTestStore(t)
+
+	// First-ever account becomes admin; later ones don't.
+	first, err := s.CreateUser(ctx, "first", "f@example.com", "h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !first.IsAdmin {
+		t.Error("first user should be admin")
+	}
+	second, _ := s.CreateUser(ctx, "second", "s@example.com", "h")
+	if second.IsAdmin {
+		t.Error("second user must not be admin")
+	}
+
+	// EnsureAdmin is a no-op when an admin exists.
+	if err := s.EnsureAdmin(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.GetUserByID(ctx, second.ID)
+	if got.IsAdmin {
+		t.Error("EnsureAdmin must not promote anyone while an admin exists")
+	}
+}
+
+func TestEnsureAdminPromotesOldest(t *testing.T) {
+	s, ctx := openTestStore(t)
+	// Simulate a pre-bootstrap DB: two users, neither admin (insert the first,
+	// then strip the auto-granted flag).
+	a, _ := s.CreateUser(ctx, "older", "a@example.com", "h")
+	b, _ := s.CreateUser(ctx, "newer", "b@example.com", "h")
+	if _, err := s.db.ExecContext(ctx, `UPDATE users SET is_admin = 0`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EnsureAdmin(ctx); err != nil {
+		t.Fatal(err)
+	}
+	gotA, _ := s.GetUserByID(ctx, a.ID)
+	gotB, _ := s.GetUserByID(ctx, b.ID)
+	if !gotA.IsAdmin || gotB.IsAdmin {
+		t.Errorf("oldest should be promoted: older=%v newer=%v", gotA.IsAdmin, gotB.IsAdmin)
+	}
+}
+
+func TestDeleteReport(t *testing.T) {
+	s, ctx := openTestStore(t)
+	u, _ := s.CreateUser(ctx, "rep", "rep@example.com", "h")
+	sp, _ := s.CreateSpot(ctx, &models.Spot{ESSID: "Net", AuthType: "wpa2", Lat: 1, Lng: 1, CreatedBy: u.ID})
+	rep, _ := s.CreateReport(ctx, sp.ID, "spam", u.ID)
+
+	if err := s.DeleteReport(ctx, rep.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if err := s.DeleteReport(ctx, rep.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("second delete err = %v, want ErrNotFound", err)
+	}
+}
+
 func TestListReports(t *testing.T) {
 	s, ctx := openTestStore(t)
 	u, _ := s.CreateUser(ctx, "reporter", "r@example.com", "h")

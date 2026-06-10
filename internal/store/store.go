@@ -133,6 +133,30 @@ func (s *Store) EnsureSpotQuality(ctx context.Context) error {
 	return s.ensureColumn(ctx, "spots", "quality", `quality INTEGER NOT NULL DEFAULT 0`)
 }
 
+// EnsureAdmin promotes the oldest account to admin when no admin exists yet —
+// the operator bootstrap for databases that predate first-user-is-admin (the
+// oldest account on an existing deployment is the operator's own). No-op once
+// any admin exists. Idempotent.
+func (s *Store) EnsureAdmin(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE users SET is_admin = 1
+		 WHERE id = (SELECT id FROM users ORDER BY created_at, rowid LIMIT 1)
+		   AND NOT EXISTS (SELECT 1 FROM users WHERE is_admin = 1)`)
+	return err
+}
+
+// DeleteReport removes a moderation report (admin dismiss).
+func (s *Store) DeleteReport(ctx context.Context, id string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM reports WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func nowMS() int64 { return time.Now().UnixMilli() }
 
 // ---- Users ----
@@ -169,10 +193,17 @@ func (s *Store) CreateUser(ctx context.Context, username, email, passwordHash st
 		CreatedAt:    nowMS(),
 	}
 	u.UpdatedAt = u.CreatedAt
+	// The very first account becomes the admin (operator bootstrap — there is
+	// no other way to mint one). Subsequent accounts are regular users. No
+	// race: the pool is capped at one connection, so writes serialize.
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT NOT EXISTS (SELECT 1 FROM users)`).Scan(&u.IsAdmin); err != nil {
+		return nil, err
+	}
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO users (id, username, email, password_hash, is_admin, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, 0, ?, ?)`,
-		u.ID, u.Username, u.Email, u.PasswordHash, u.CreatedAt, u.UpdatedAt)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		u.ID, u.Username, u.Email, u.PasswordHash, u.IsAdmin, u.CreatedAt, u.UpdatedAt)
 	if err != nil {
 		// Only a UNIQUE violation means the username is taken; surface every
 		// other error (locked DB, disk full, …) as itself so it isn't masked
@@ -216,6 +247,30 @@ func (s *Store) GetUsersByEmail(ctx context.Context, email string) ([]*models.Us
 		out = append(out, u)
 	}
 	return out, rows.Err()
+}
+
+// UpdateUserEmail changes a user's address and resets its verified flag — the
+// new address must prove itself via a fresh verification link.
+func (s *Store) UpdateUserEmail(ctx context.Context, userID, email string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE users SET email = ?, email_verified = 0, updated_at = ? WHERE id = ?`,
+		email, nowMS(), userID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DeleteUserSessionsExcept revokes every session of a user except keepToken —
+// used after an in-session password change so other devices are logged out
+// but the session that performed the change survives.
+func (s *Store) DeleteUserSessionsExcept(ctx context.Context, userID, keepToken string) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM sessions WHERE user_id = ? AND token != ?`, userID, keepToken)
+	return err
 }
 
 // UpdateUserPassword replaces a user's password hash (used by password reset).
@@ -424,6 +479,65 @@ func (s *Store) UpdateSpot(ctx context.Context, sp *models.Spot) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// SitemapEntry is the minimal projection the sitemap needs per spot.
+type SitemapEntry struct {
+	ID        string
+	UpdatedAt int64
+}
+
+// SpotsForSitemap returns every spot's id + updated_at, ordered by id. The
+// sitemap is the one listing that legitimately wants the whole table; at 50k+
+// spots switch to a sitemap index instead of capping here.
+func (s *Store) SpotsForSitemap(ctx context.Context) ([]SitemapEntry, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, updated_at FROM spots ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SitemapEntry
+	for rows.Next() {
+		var e SitemapEntry
+		if err := rows.Scan(&e.ID, &e.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// SpotsByUser returns a page of userID's spots ordered by id for stable cursor
+// pagination (cursor = last id seen, "" for the first page; next == "" when
+// done). Same contract as Area: callers loop until the cursor is empty, so
+// nothing truncates silently.
+func (s *Store) SpotsByUser(ctx context.Context, userID, cursor string, limit int) ([]*models.Spot, string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		spotSelect+` WHERE created_by = ? AND id > ? ORDER BY id LIMIT ?`,
+		userID, cursor, limit)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+	var page []*models.Spot
+	for rows.Next() {
+		sp, err := scanSpot(rows)
+		if err != nil {
+			return nil, "", err
+		}
+		page = append(page, sp)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+	next := ""
+	if len(page) == limit {
+		next = page[len(page)-1].ID
+	}
+	if err := s.enrichSpots(ctx, userID, page); err != nil {
+		return nil, "", err
+	}
+	return page, next, nil
 }
 
 // CountSpotsByUser returns how many spots a user has contributed. Backed by
