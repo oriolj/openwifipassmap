@@ -70,6 +70,11 @@ func main() {
 		log.Error("reviews backfill failed", "err", err)
 		os.Exit(1)
 	}
+	if err := st.EnsureAdmin(ctx); err != nil {
+		cancel()
+		log.Error("admin bootstrap failed", "err", err)
+		os.Exit(1)
+	}
 	cancel()
 
 	mailer := email.New(env("RESEND_API_KEY", ""), env("RESEND_FROM", ""), log)
@@ -78,7 +83,10 @@ func main() {
 	a := api.New(st, *dev, log, mailer, baseURL)
 	a.Routes(mux)
 
-	webUI, err := web.New(st)
+	// Compiled CSS + vendored JS (built by `make css`); see web/ and the
+	// Dockerfile assets stage. Defaults to the in-repo path for local dev.
+	staticDir := env("STATIC_DIR", "internal/web/static")
+	webUI, err := web.New(st, staticDir, baseURL)
 	if err != nil {
 		log.Error("cannot init web UI", "err", err)
 		os.Exit(1)

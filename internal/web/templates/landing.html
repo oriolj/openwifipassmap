@@ -5,13 +5,27 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>OpenWifiPassMap — find public WiFi nearby</title>
   <meta name="description" content="A crowdsourced map of public WiFi spots: cafés, libraries and venues with their network and password." />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" crossorigin="" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" crossorigin="" />
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin="" defer></script>
-  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js" crossorigin="" defer></script>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <link href="https://cdn.jsdelivr.net/npm/daisyui@4/dist/full.min.css" rel="stylesheet" type="text/css" />
+  <link rel="canonical" href="{{.Canonical}}" />
+  <meta property="og:title" content="OpenWifiPassMap — find public WiFi nearby" />
+  <meta property="og:description" content="A crowdsourced map of public WiFi spots: cafés, libraries and venues with their network, password, and connection quality." />
+  <meta property="og:url" content="{{.Canonical}}" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="OpenWifiPassMap" />
+  <meta property="og:locale" content="en_US" />
+  <meta property="og:image" content="{{.Canonical}}static/icons/icon-512.png" />
+  <meta name="twitter:card" content="summary" />
+  <!-- PWA: installable + offline-capable (see docs/pwa-offline.md). -->
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="theme-color" content="#10b981" />
+  <link rel="apple-touch-icon" href="/static/icons/icon-192.png" />
+  <!-- All assets are same-origin (compiled by `make css`, see web/): cacheable
+       by the service worker for offline use, no third-party CDNs at runtime. -->
+  <link rel="stylesheet" href="/static/vendor/leaflet.css" />
+  <link rel="stylesheet" href="/static/vendor/MarkerCluster.css" />
+  <link rel="stylesheet" href="/static/vendor/MarkerCluster.Default.css" />
+  <script src="/static/vendor/leaflet.js" defer></script>
+  <script src="/static/vendor/leaflet.markercluster.js" defer></script>
+  <link href="/static/app.css" rel="stylesheet" type="text/css" />
   <style>
     html, body { height: 100%; margin: 0; }
     #map { z-index: 0; }
@@ -54,6 +68,8 @@
     <aside class="bg-base-100 border-t shrink-0 max-h-[40vh] overflow-y-auto">
       <div class="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 pt-2">
         <span id="status" data-testid="status" class="text-sm opacity-70 flex-1 basis-40">Loading…</span>
+        <button id="offline-pack" data-testid="offline-pack" class="btn btn-xs btn-ghost"
+                title="Download every spot within 200 km for offline use">⬇ Offline</button>
         <label class="flex items-center gap-1 text-xs">Quality
           <select id="filter-quality" data-testid="filter-quality" class="select select-bordered select-xs">
             <option value="0">All</option>
@@ -167,6 +183,57 @@
           <button type="submit" id="review-save" data-testid="review-save" class="btn btn-primary btn-sm">Save review</button>
         </div>
       </form>
+    </div>
+  </dialog>
+
+  <!-- My WiFis: every spot the user contributed, with edit/delete. -->
+  <dialog id="myspots-modal" data-testid="myspots-modal" class="modal">
+    <div class="modal-box max-w-md">
+      <h3 class="font-bold text-lg">My WiFis</h3>
+      <p id="myspots-status" data-testid="myspots-status" class="text-sm opacity-70 mt-1">Loading…</p>
+      <ul id="myspots-list" data-testid="myspots-list" class="space-y-2 mt-2 max-h-[60vh] overflow-y-auto"></ul>
+      <div class="modal-action">
+        <button type="button" id="myspots-close" class="btn btn-ghost btn-sm">Close</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Account settings: change password / email, resend verification. -->
+  <dialog id="settings-modal" data-testid="settings-modal" class="modal">
+    <div class="modal-box max-w-sm">
+      <h3 class="font-bold text-lg">Account settings</h3>
+      <p id="settings-email" data-testid="settings-email" class="text-sm opacity-70 mt-1"></p>
+      <div id="settings-unverified" class="hidden">
+        <div class="alert alert-warning text-xs py-2 mt-2">
+          <span>Email not verified — password recovery won't work until it is.</span>
+        </div>
+        <button id="settings-resend" data-testid="settings-resend" class="btn btn-outline btn-xs mt-2">
+          Resend verification email
+        </button>
+      </div>
+
+      <div class="divider my-2 text-xs opacity-60">Change password</div>
+      <form id="pw-form" class="space-y-2">
+        <input id="pw-current" data-testid="pw-current" type="password" autocomplete="current-password"
+               class="input input-bordered w-full input-sm" placeholder="Current password" required />
+        <input id="pw-new" data-testid="pw-new" type="password" autocomplete="new-password"
+               class="input input-bordered w-full input-sm" placeholder="New password (≥8 chars)" required />
+        <button type="submit" data-testid="pw-save" class="btn btn-primary btn-sm w-full">Update password</button>
+      </form>
+
+      <div class="divider my-2 text-xs opacity-60">Change email</div>
+      <form id="email-form" class="space-y-2">
+        <input id="email-new" data-testid="email-new" type="email" autocomplete="email"
+               class="input input-bordered w-full input-sm" placeholder="New email" required />
+        <input id="email-password" data-testid="email-password" type="password" autocomplete="current-password"
+               class="input input-bordered w-full input-sm" placeholder="Confirm with your password" required />
+        <button type="submit" data-testid="email-save" class="btn btn-primary btn-sm w-full">Update email</button>
+      </form>
+
+      <p id="settings-error" data-testid="settings-error" class="text-error text-sm mt-2 hidden"></p>
+      <div class="modal-action">
+        <button type="button" id="settings-close" class="btn btn-ghost btn-sm">Close</button>
+      </div>
     </div>
   </dialog>
 
@@ -448,8 +515,101 @@
           renderSpots();
         } catch (err) {
           if (my !== reqToken) return;
+          // Offline (or server unreachable): fall back to the downloaded pack.
+          if (await loadPackFallback()) return;
           statusEl.textContent = 'Could not load spots: ' + (err && err.message ? err.message : 'unknown');
         }
+      }
+
+      // ---- Offline pack: explicit download of a 200 km radius into IndexedDB.
+      // The service worker handles the app shell; spot DATA lives here, at the
+      // app layer, because it's paginated, viewer-specific, and needs geo
+      // filtering. Full design rationale: docs/pwa-offline.md.
+      const OFFLINE_PACK_RADIUS_KM = 200; // server caps area at 300
+
+      function idbOpen() {
+        return new Promise((resolve, reject) => {
+          const req = indexedDB.open('owpm', 1);
+          req.onupgradeneeded = () => req.result.createObjectStore('packs');
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+      }
+      async function idbGetPack() {
+        const db = await idbOpen();
+        return new Promise((resolve, reject) => {
+          const get = db.transaction('packs').objectStore('packs').get('area');
+          get.onsuccess = () => resolve(get.result || null);
+          get.onerror = () => reject(get.error);
+        });
+      }
+      async function idbPutPack(pack) {
+        const db = await idbOpen();
+        return new Promise((resolve, reject) => {
+          const put = db.transaction('packs', 'readwrite').objectStore('packs').put(pack, 'area');
+          put.onsuccess = () => resolve();
+          put.onerror = () => reject(put.error);
+        });
+      }
+
+      // Walk the full cursor-paginated area endpoint (no page cap — unlike the
+      // viewport loader, an explicit download must be complete) and store the
+      // merged set atomically as a single pack record.
+      async function downloadOfflinePack() {
+        const btn = document.getElementById('offline-pack');
+        const c = map.getCenter();
+        btn.disabled = true;
+        try {
+          const token = getToken();
+          const opts = token ? { headers: { 'Authorization': 'Bearer ' + token } } : undefined;
+          const spots = [];
+          let cursor = '';
+          do {
+            const url = `/api/spots/area?lat=${c.lat}&lng=${c.lng}&radius_km=${OFFLINE_PACK_RADIUS_KM}`
+              + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : '');
+            const res = await fetch(url, opts);
+            if (!res.ok) throw new Error('server returned ' + res.status);
+            const data = await res.json();
+            spots.push(...(data.results || []));
+            cursor = data.next_cursor || '';
+            statusEl.textContent = `Downloading offline pack… ${spots.length} spot(s)`;
+          } while (cursor);
+          await idbPutPack({
+            center: { lat: c.lat, lng: c.lng },
+            radiusKm: OFFLINE_PACK_RADIUS_KM,
+            savedAt: Date.now(),
+            spots,
+          });
+          showToast(`Offline pack saved: ${spots.length} spot(s) within ${OFFLINE_PACK_RADIUS_KM} km`);
+          loadSpots();
+        } catch (err) {
+          showToast('Offline download failed: ' + (err && err.message ? err.message : 'unknown'), 'error');
+          loadSpots();
+        } finally {
+          btn.disabled = false;
+        }
+      }
+      document.getElementById('offline-pack').addEventListener('click', downloadOfflinePack);
+
+      // Serve the current viewport from the pack when the network is gone.
+      // Same render path as online (filters, pins, cards all work).
+      async function loadPackFallback() {
+        let pack = null;
+        try { pack = await idbGetPack(); } catch (_) { /* no IDB → no pack */ }
+        if (!pack || !pack.spots || !pack.spots.length) {
+          statusEl.textContent = 'Offline — no downloaded pack. Tap “⬇ Offline” while connected to keep spots available.';
+          return !!pack;
+        }
+        const c = map.getCenter();
+        const bounds = map.getBounds();
+        currentSpots = pack.spots
+          .filter(s => bounds.contains([s.lat, s.lng]))
+          .map(s => ({ ...s, distance_km: distKm(c, { lat: s.lat, lng: s.lng }) }))
+          .sort((a, b) => a.distance_km - b.distance_km);
+        viewTruncated = false;
+        renderSpots();
+        statusEl.textContent = `Offline — ${currentSpots.length} spot(s) from your pack (saved ${humanizeAgo(pack.savedAt)})`;
+        return true;
       }
 
       function syncURL() {
@@ -578,6 +738,18 @@
           stat.dataset.testid = 'my-spot-count';
           statLi.appendChild(stat);
           menu.appendChild(statLi);
+          const mineLi = el('li');
+          const mine = el('a', null, 'My WiFis');
+          mine.dataset.testid = 'open-myspots';
+          mine.addEventListener('click', openMySpots);
+          mineLi.appendChild(mine);
+          menu.appendChild(mineLi);
+          const settingsLi = el('li');
+          const settings = el('a', null, 'Settings');
+          settings.dataset.testid = 'open-settings';
+          settings.addEventListener('click', openSettings);
+          settingsLi.appendChild(settings);
+          menu.appendChild(settingsLi);
           const li = el('li');
           const logout = el('a', null, 'Log out');
           logout.dataset.testid = 'logout';
@@ -877,7 +1049,190 @@
       reviewForm.addEventListener('submit', (e) => { e.preventDefault(); submitReview(); });
       document.getElementById('review-cancel').addEventListener('click', () => reviewModal.close());
 
+      // ---- My WiFis: full list of own contributions (cursor-walked) ----
+      const mySpotsModal = document.getElementById('myspots-modal');
+      const mySpotsList = document.getElementById('myspots-list');
+      const mySpotsStatus = document.getElementById('myspots-status');
+
+      function mySpotRow(spot) {
+        const li = el('li', 'card bg-base-200');
+        li.dataset.testid = 'myspot';
+        const body = el('div', 'card-body p-3 gap-1');
+        const head = el('div', 'flex items-center gap-2 flex-wrap');
+        head.appendChild(el('span', 'font-semibold text-sm', spot.venue_name || spot.essid));
+        head.appendChild(el('span', 'text-xs opacity-60', spot.essid));
+        const q = qualityNode(spot);
+        if (q) head.appendChild(q);
+        body.appendChild(head);
+        const actions = el('div', 'flex gap-2 flex-wrap');
+        const show = el('button', 'btn btn-xs btn-outline', '🗺 Show');
+        show.addEventListener('click', () => {
+          mySpotsModal.close();
+          map.flyTo([spot.lat, spot.lng], Math.max(map.getZoom(), 16));
+        });
+        actions.appendChild(show);
+        const edit = el('button', 'btn btn-xs btn-ghost', '✏️ Edit');
+        edit.dataset.testid = 'myspot-edit';
+        edit.addEventListener('click', () => { mySpotsModal.close(); openEdit(spot); });
+        actions.appendChild(edit);
+        const del = el('button', 'btn btn-xs btn-error btn-outline', 'Delete');
+        del.dataset.testid = 'myspot-delete';
+        del.addEventListener('click', async () => {
+          if (!confirm('Delete "' + (spot.venue_name || spot.essid) + '"? This cannot be undone.')) return;
+          const res = await fetch('/api/spots/' + encodeURIComponent(spot.id), {
+            method: 'DELETE',
+            headers: { 'Authorization': 'Bearer ' + getToken() },
+          });
+          if (res.ok || res.status === 204) {
+            showToast('Spot deleted.');
+            loadMySpots();
+            loadSpots();
+            refreshMyStats();
+          } else {
+            showToast('Could not delete spot.', 'error');
+          }
+        });
+        actions.appendChild(del);
+        body.appendChild(actions);
+        li.appendChild(body);
+        return li;
+      }
+
+      async function loadMySpots() {
+        mySpotsStatus.textContent = 'Loading…';
+        mySpotsList.replaceChildren();
+        try {
+          // Walk the cursor fully — it's the user's own list, never truncate.
+          const all = [];
+          let cursor = '';
+          do {
+            const res = await fetch('/api/me/spots' + (cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''), {
+              headers: { 'Authorization': 'Bearer ' + getToken() },
+            });
+            if (!res.ok) throw new Error('server returned ' + res.status);
+            const data = await res.json();
+            all.push(...(data.results || []));
+            cursor = data.next_cursor || '';
+          } while (cursor);
+          for (const s of all) mySpotsList.appendChild(mySpotRow(s));
+          mySpotsStatus.textContent = all.length
+            ? `${all.length} WiFi${all.length === 1 ? '' : 's'} added by you`
+            : 'You haven’t added any WiFi yet — tap “➕ Add” to start.';
+        } catch (err) {
+          mySpotsStatus.textContent = 'Could not load: ' + err.message;
+        }
+      }
+
+      function openMySpots() {
+        mySpotsModal.showModal();
+        loadMySpots();
+      }
+      document.getElementById('myspots-close').addEventListener('click', () => mySpotsModal.close());
+
+      // ---- Account settings modal ----
+      const settingsModal = document.getElementById('settings-modal');
+      const settingsError = document.getElementById('settings-error');
+
+      function settingsFail(msg) {
+        settingsError.textContent = msg;
+        settingsError.classList.remove('hidden');
+      }
+
+      async function authedPost(path, body) {
+        const res = await fetch(path, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getToken() },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || ('server returned ' + res.status));
+        return data;
+      }
+
+      async function openSettings() {
+        settingsError.classList.add('hidden');
+        document.getElementById('pw-form').reset();
+        document.getElementById('email-form').reset();
+        settingsModal.showModal();
+        try {
+          const res = await fetch('/api/me', { headers: { 'Authorization': 'Bearer ' + getToken() } });
+          if (!res.ok) throw new Error('server returned ' + res.status);
+          const me = await res.json();
+          document.getElementById('settings-email').textContent =
+            me.user.email + (me.user.email_verified ? ' ✓ verified' : '');
+          document.getElementById('settings-unverified')
+            .classList.toggle('hidden', !!me.user.email_verified);
+        } catch (err) {
+          settingsFail(err.message);
+        }
+      }
+
+      document.getElementById('pw-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        settingsError.classList.add('hidden');
+        try {
+          const data = await authedPost('/api/me/password', {
+            current_password: document.getElementById('pw-current').value,
+            new_password: document.getElementById('pw-new').value,
+          });
+          settingsModal.close();
+          showToast(data.message || 'Password updated.');
+        } catch (err) { settingsFail(err.message); }
+      });
+
+      document.getElementById('email-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        settingsError.classList.add('hidden');
+        try {
+          const data = await authedPost('/api/me/email', {
+            email: document.getElementById('email-new').value.trim(),
+            password: document.getElementById('email-password').value,
+          });
+          settingsModal.close();
+          showToast(data.message || 'Email updated.');
+        } catch (err) { settingsFail(err.message); }
+      });
+
+      document.getElementById('settings-resend').addEventListener('click', async () => {
+        settingsError.classList.add('hidden');
+        try {
+          const data = await authedPost('/api/auth/resend-verification', {});
+          settingsModal.close();
+          showToast(data.message || 'Verification email sent.');
+        } catch (err) { settingsFail(err.message); }
+      });
+
+      document.getElementById('settings-close').addEventListener('click', () => settingsModal.close());
+
       renderAccount();
+
+      // ---- Service worker: offline app shell + prompted updates ----
+      // Updates are never silent: the new worker waits until the user accepts.
+      function showUpdateToast(worker) {
+        toastBody.className = 'alert alert-info';
+        const btn = el('button', 'btn btn-xs btn-primary', 'Reload');
+        btn.addEventListener('click', () => worker.postMessage({ type: 'SKIP_WAITING' }));
+        toastBody.replaceChildren(el('span', null, 'New version available'), btn);
+        toastEl.classList.remove('hidden');
+      }
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/sw.js').then((reg) => {
+          reg.addEventListener('updatefound', () => {
+            const nw = reg.installing;
+            if (!nw) return;
+            nw.addEventListener('statechange', () => {
+              // "installed" with an existing controller = an update is waiting.
+              if (nw.state === 'installed' && navigator.serviceWorker.controller) showUpdateToast(nw);
+            });
+          });
+        }).catch(() => { /* e.g. http on a LAN host — app works without SW */ });
+        let reloadedForUpdate = false;
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          if (reloadedForUpdate) return;
+          reloadedForUpdate = true;
+          location.reload();
+        });
+      }
     });
   })();
   </script>

@@ -25,6 +25,8 @@ bin/
 *.out
 
 # Frontend + e2e — not used to build the Go server
+web/node_modules/
+internal/web/static/
 mobile/node_modules/
 mobile/dist/
 mobile/.vite/

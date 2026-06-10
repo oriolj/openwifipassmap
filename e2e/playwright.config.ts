@@ -37,7 +37,9 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: `sh -c 'DB_PATH=$(mktemp -u /tmp/openwifipassmap-e2e-XXXX.db) DEV=1 ADDR=:${BACKEND_PORT} go run ./cmd/server'`,
+      // Build the compiled CSS/vendor assets once if absent (the public web no
+      // longer uses CDNs), then start the backend on a fresh temp DB.
+      command: `sh -c '[ -f internal/web/static/app.css ] || (cd web && npm install --no-audit --no-fund --silent && npm run build); DB_PATH=$(mktemp -u /tmp/openwifipassmap-e2e-XXXX.db) DEV=1 ADDR=:${BACKEND_PORT} go run ./cmd/server'`,
       cwd: "..",
       url: `${BACKEND_URL}/api/health`,
       reuseExistingServer: false,

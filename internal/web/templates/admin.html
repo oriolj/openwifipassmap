@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="emerald">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Moderation — OpenWifiPassMap</title>
+  <meta name="robots" content="noindex" />
+  <link href="/static/app.css" rel="stylesheet" type="text/css" />
+</head>
+<body class="bg-base-200 min-h-screen">
+  <header class="navbar bg-base-100 shadow-sm">
+    <a href="/" class="flex-1 px-4 text-xl font-bold">📶 OpenWifiPassMap</a>
+    <span class="badge badge-neutral mr-3">moderation</span>
+  </header>
+
+  <main class="max-w-3xl mx-auto p-4">
+    <h1 class="text-lg font-bold mb-1">Reports</h1>
+    <p id="summary" data-testid="admin-summary" class="text-sm opacity-70 mb-3">Loading…</p>
+    <p id="denied" data-testid="admin-denied" class="alert alert-warning text-sm hidden">
+      Admin access required. Log in on the <a class="link" href="/">map page</a> with the operator account, then reload.
+    </p>
+    <ul id="reports" data-testid="admin-reports" class="space-y-2"></ul>
+  </main>
+
+  <script>
+  (function () {
+    // Build nodes with textContent — report/spot fields are user-controlled.
+    function el(tag, className, text) {
+      const n = document.createElement(tag);
+      if (className) n.className = className;
+      if (text != null) n.textContent = text;
+      return n;
+    }
+    const token = localStorage.getItem('owpm_token'); // shared with the map page
+    const summary = document.getElementById('summary');
+    const listEl = document.getElementById('reports');
+
+    function deny() {
+      summary.classList.add('hidden');
+      document.getElementById('denied').classList.remove('hidden');
+    }
+
+    async function call(path, method) {
+      return fetch(path, {
+        method: method || 'GET',
+        headers: token ? { 'Authorization': 'Bearer ' + token } : {},
+      });
+    }
+
+    function row(rep) {
+      const li = el('li', 'card bg-base-100 shadow-sm');
+      li.dataset.testid = 'admin-report';
+      const body = el('div', 'card-body p-4 gap-2');
+      const head = el('div', 'flex flex-wrap items-center gap-2');
+      const reason = el('span', 'badge badge-warning', rep.reason);
+      head.appendChild(reason);
+      head.appendChild(el('span', 'font-semibold text-sm', rep.spot_venue_name || rep.spot_essid));
+      head.appendChild(el('span', 'text-xs opacity-60', rep.spot_essid));
+      head.appendChild(el('span', 'text-xs opacity-60', new Date(rep.created_at).toLocaleString()));
+      body.appendChild(head);
+      const actions = el('div', 'flex gap-2');
+      const view = el('a', 'btn btn-xs btn-outline', 'View spot');
+      view.setAttribute('href', '/s/' + encodeURIComponent(rep.spot_id));
+      view.setAttribute('target', '_blank');
+      actions.appendChild(view);
+      const dismiss = el('button', 'btn btn-xs btn-ghost', 'Dismiss report');
+      dismiss.dataset.testid = 'admin-dismiss';
+      dismiss.addEventListener('click', async () => {
+        if ((await call('/api/reports/' + encodeURIComponent(rep.id), 'DELETE')).ok) load();
+      });
+      actions.appendChild(dismiss);
+      const delSpot = el('button', 'btn btn-xs btn-error btn-outline', 'Delete spot');
+      delSpot.dataset.testid = 'admin-delete-spot';
+      delSpot.addEventListener('click', async () => {
+        if (!confirm('Delete this spot (and all its reports/reviews)? This cannot be undone.')) return;
+        if ((await call('/api/spots/' + encodeURIComponent(rep.spot_id), 'DELETE')).ok) load();
+      });
+      actions.appendChild(delSpot);
+      body.appendChild(actions);
+      li.appendChild(body);
+      return li;
+    }
+
+    async function load() {
+      if (!token) { deny(); return; }
+      const res = await call('/api/reports');
+      if (res.status === 401 || res.status === 403) { deny(); return; }
+      if (!res.ok) { summary.textContent = 'Error: server returned ' + res.status; return; }
+      const data = await res.json();
+      listEl.replaceChildren();
+      for (const rep of data.results) listEl.appendChild(row(rep));
+      summary.textContent = data.total === 0
+        ? 'No open reports — all clear.'
+        : `${data.results.length} of ${data.total} report(s)` +
+          (data.total > data.results.length ? ' (showing newest)' : '');
+    }
+
+    load();
+  })();
+  </script>
+</body>
+</html>

@@ -3,12 +3,23 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{{if .VenueName}}{{.VenueName}}{{else}}{{.ESSID}}{{end}} — OpenWifiPassMap</title>
-  <meta name="description" content="WiFi at {{if .VenueName}}{{.VenueName}}{{else}}{{.ESSID}}{{end}}: network {{.ESSID}}." />
-  <meta property="og:title" content="{{if .VenueName}}{{.VenueName}}{{else}}{{.ESSID}}{{end}} — OpenWifiPassMap" />
-  <meta property="og:description" content="Network {{.ESSID}} ({{.AuthType}})." />
-  <script src="https://cdn.tailwindcss.com"></script>
-  <link href="https://cdn.jsdelivr.net/npm/daisyui@4/dist/full.min.css" rel="stylesheet" type="text/css" />
+  <title>{{if .VenueName}}{{.VenueName}}{{else}}{{.ESSID}}{{end}} WiFi — OpenWifiPassMap</title>
+  <meta name="description" content="Free public WiFi at {{if .VenueName}}{{.VenueName}}{{else}}{{.ESSID}}{{end}}: network {{.ESSID}}{{if .Quality}}, rated {{qualityStars .Quality}}{{end}}{{if .DownMbps}}, {{.DownMbps}} Mbps down{{end}}. Password and details on OpenWifiPassMap." />
+  <link rel="canonical" href="{{.Canonical}}" />
+  <meta property="og:title" content="{{if .VenueName}}{{.VenueName}}{{else}}{{.ESSID}}{{end}} WiFi — OpenWifiPassMap" />
+  <meta property="og:description" content="Network {{.ESSID}} ({{.AuthType}}){{if .Quality}} · {{qualityStars .Quality}}{{end}}{{if .DownMbps}} · {{.DownMbps}} Mbps{{end}} — password and details inside." />
+  <meta property="og:url" content="{{.Canonical}}" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="OpenWifiPassMap" />
+  <meta property="og:locale" content="en_US" />
+  <meta property="og:image" content="{{.OGImage}}" />
+  <meta property="og:image:width" content="512" />
+  <meta property="og:image:height" content="512" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="geo.position" content="{{.Lat}};{{.Lng}}" />
+  <meta name="ICBM" content="{{.Lat}}, {{.Lng}}" />
+  <script type="application/ld+json">{{.JSONLD}}</script>
+  <link href="/static/app.css" rel="stylesheet" type="text/css" />
 </head>
 <body class="min-h-screen bg-base-200">
   <div class="navbar bg-base-100 shadow-sm">

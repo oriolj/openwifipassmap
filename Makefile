@@ -17,7 +17,7 @@ GREEN := \033[0;32m
 BLUE  := \033[0;34m
 NC    := \033[0m
 
-.PHONY: help start start-local start-remote server mobile web migrate \
+.PHONY: help start start-local start-remote server mobile web migrate css css-if-needed \
         build cli-build cli-build-prod cli-release cli-release-prod \
         test test-go e2e fmt vet deps \
         docker-build tmux tmux-new-session clean
@@ -31,7 +31,15 @@ help: ## Show this help
 # .env.local is gitignored; missing file is fine.
 LOAD_ENV := if [ -f .env.local ]; then set -a; . ./.env.local; set +a; fi
 
-start: ## Run backend + mobile dev server (mobile → local backend)
+css: ## Compile Tailwind+DaisyUI and vendor leaflet into internal/web/static
+	@cd web && npm install --no-audit --no-fund --silent && npm run build
+	@echo -e "$(GREEN)built internal/web/static (app.css + vendor)$(NC)"
+
+# Build only when the output is missing (fast no-op for everyday starts).
+css-if-needed:
+	@[ -f internal/web/static/app.css ] || $(MAKE) -s css
+
+start: css-if-needed ## Run backend + mobile dev server (mobile → local backend)
 	@echo -e "$(GREEN)Starting backend (:$(PORT)) + mobile dev (:5173)$(NC)"
 	@trap 'kill 0' EXIT; \
 		( $(LOAD_ENV); ADDR=:$(PORT) DEV=1 go run ./cmd/server ) & \
@@ -44,7 +52,7 @@ start-remote: ## Run mobile dev server pointed at the remote/prod backend
 	@echo -e "$(GREEN)Starting mobile dev (:5173) → $(REMOTE_API)$(NC)"
 	@cd mobile && VITE_API_BASE=$(REMOTE_API) npm run dev
 
-server: ## Run the Go backend only (API + public web)
+server: css-if-needed ## Run the Go backend only (API + public web)
 	@$(LOAD_ENV); ADDR=:$(PORT) DEV=1 go run ./cmd/server
 
 mobile: ## Run the Vite/React mobile dev server only

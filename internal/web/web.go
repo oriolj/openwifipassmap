@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oriolj/openwifipassmap/internal/models"
 	"github.com/oriolj/openwifipassmap/internal/store"
 )
 
@@ -22,12 +23,18 @@ var tmplFS embed.FS
 
 // Web renders the public site.
 type Web struct {
-	store *store.Store
-	tmpl  *template.Template
+	store     *store.Store
+	tmpl      *template.Template
+	staticDir string
+	baseURL   string // configured public origin; "" = derive per request
 }
 
-// New parses templates and returns a Web.
-func New(s *store.Store) (*Web, error) {
+// New parses templates and returns a Web. staticDir is the on-disk directory
+// holding the compiled CSS + vendored JS (built by `make css`, see web/);
+// empty disables static serving (unstyled pages — tests don't care). baseURL
+// is the configured public origin (PUBLIC_BASE_URL) used for canonical URLs;
+// when empty it's derived from each request's forwarded headers.
+func New(s *store.Store, staticDir, baseURL string) (*Web, error) {
 	t, err := template.New("").Funcs(template.FuncMap{
 		"humanizeAgo":      humanizeAgo,
 		"qualityStars":     qualityStars,
@@ -37,7 +44,26 @@ func New(s *store.Store) (*Web, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Web{store: s, tmpl: t}, nil
+	return &Web{store: s, tmpl: t, staticDir: staticDir, baseURL: strings.TrimRight(baseURL, "/")}, nil
+}
+
+// publicBase mirrors the API's helper: the configured origin wins; otherwise
+// derive scheme/host from the request (honoring the proxy's X-Forwarded-*).
+func (web *Web) publicBase(r *http.Request) string {
+	if web.baseURL != "" {
+		return web.baseURL
+	}
+	scheme := "http"
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+		scheme = proto
+	} else if r.TLS != nil {
+		scheme = "https"
+	}
+	host := r.Host
+	if fwd := r.Header.Get("X-Forwarded-Host"); fwd != "" {
+		host = fwd
+	}
+	return scheme + "://" + host
 }
 
 // humanizeAgo turns a unix-millisecond timestamp into a short relative string
@@ -97,6 +123,34 @@ func (web *Web) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /s/{id}", web.share)
 	mux.HandleFunc("GET /reset", web.reset)
 	mux.HandleFunc("GET /verify", web.verify)
+	mux.HandleFunc("GET /sitemap.xml", web.sitemap)
+	mux.HandleFunc("GET /robots.txt", web.robots)
+	// Moderation console. The page is public HTML but every action behind it
+	// hits the admin-gated API with the operator's bearer token.
+	mux.HandleFunc("GET /admin", func(w http.ResponseWriter, r *http.Request) {
+		web.render(w, "admin.html", nil)
+	})
+	if web.staticDir != "" {
+		fs := http.StripPrefix("/static/", http.FileServer(http.Dir(web.staticDir)))
+		mux.Handle("GET /static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Compiled assets change only on deploy; an hour of caching keeps
+			// repeat visits fast without long-lived stale CSS after a release.
+			w.Header().Set("Cache-Control", "public, max-age=3600")
+			fs.ServeHTTP(w, r)
+		}))
+		// The service worker must live at the origin root (scope "/") and must
+		// never be cached long, or deploys take days to propagate.
+		mux.HandleFunc("GET /sw.js", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+			http.ServeFile(w, r, web.staticDir+"/sw.js")
+		})
+		mux.HandleFunc("GET /manifest.webmanifest", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set("Content-Type", "application/manifest+json")
+			http.ServeFile(w, r, web.staticDir+"/manifest.webmanifest")
+		})
+	}
 }
 
 // verify renders the email-verification landing page for a signup magic link;
@@ -106,7 +160,45 @@ func (web *Web) verify(w http.ResponseWriter, r *http.Request) {
 }
 
 func (web *Web) landing(w http.ResponseWriter, r *http.Request) {
-	web.render(w, "landing.html", nil)
+	web.render(w, "landing.html", struct{ Canonical string }{Canonical: web.publicBase(r) + "/"})
+}
+
+// shareData is share.html's view model: the spot plus the absolute URLs and
+// pre-marshaled JSON-LD the SEO tags need.
+type shareData struct {
+	*models.Spot
+	Canonical string
+	OGImage   string
+	JSONLD    template.JS
+}
+
+// shareJSONLD builds the schema.org Place payload for a spot. Marshaled in Go
+// (not assembled in the template) and "</" -escaped so a malicious venue name
+// can't break out of the <script> tag.
+func shareJSONLD(sp *models.Spot, canonical string) template.JS {
+	name := sp.VenueName
+	if name == "" {
+		name = sp.ESSID
+	}
+	doc := map[string]any{
+		"@context": "https://schema.org",
+		"@type":    "Place",
+		"name":     name,
+		"url":      canonical,
+		"geo": map[string]any{
+			"@type":     "GeoCoordinates",
+			"latitude":  sp.Lat,
+			"longitude": sp.Lng,
+		},
+		"amenityFeature": []map[string]any{{
+			"@type": "LocationFeatureSpecification",
+			"name":  "Free WiFi",
+			"value": true,
+		}},
+		"publicAccess": true,
+	}
+	b, _ := json.Marshal(doc)
+	return template.JS(strings.ReplaceAll(string(b), "</", `<\/`))
 }
 
 // reset renders the password-reset page for a magic link. The token from the
@@ -126,7 +218,68 @@ func (web *Web) share(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	web.render(w, "share.html", sp)
+	base := web.publicBase(r)
+	canonical := base + "/s/" + sp.ID
+	web.render(w, "share.html", shareData{
+		Spot:      sp,
+		Canonical: canonical,
+		OGImage:   base + "/static/icons/icon-512.png",
+		JSONLD:    shareJSONLD(sp, canonical),
+	})
+}
+
+// sitemap lists the landing page plus every spot's share page. Single urlset:
+// the 50k-URL spec limit is far away at this scale (revisit with an index
+// file if the directory ever approaches it).
+func (web *Web) sitemap(w http.ResponseWriter, r *http.Request) {
+	entries, err := web.store.SpotsForSitemap(r.Context())
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	base := web.publicBase(r)
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
+	b.WriteString(`<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">` + "\n")
+	b.WriteString("  <url><loc>" + xmlEscape(base+"/") + "</loc></url>\n")
+	for _, e := range entries {
+		b.WriteString("  <url><loc>" + xmlEscape(base+"/s/"+e.ID) + "</loc><lastmod>" +
+			time.UnixMilli(e.UpdatedAt).UTC().Format("2006-01-02") + "</lastmod></url>\n")
+	}
+	b.WriteString("</urlset>\n")
+	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+	_, _ = w.Write([]byte(b.String()))
+}
+
+// robots allows everything except the API and the magic-link pages, blocks a
+// few low-signal scrapers, and advertises the sitemap on the real host.
+func (web *Web) robots(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = fmt.Fprintf(w, `User-agent: *
+Disallow: /api/
+Disallow: /reset
+Disallow: /verify
+Disallow: /admin
+Allow: /
+
+User-agent: Bytespider
+Disallow: /
+User-agent: Diffbot
+Disallow: /
+User-agent: DataForSeoBot
+Disallow: /
+User-agent: PetalBot
+Disallow: /
+
+Sitemap: %s/sitemap.xml
+`, web.publicBase(r))
+}
+
+// xmlEscape escapes the five XML special characters (and only those — never
+// use an HTML-entity encoder for XML).
+func xmlEscape(s string) string {
+	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;", "'", "&apos;")
+	return r.Replace(s)
 }
 
 func (web *Web) render(w http.ResponseWriter, name string, data any) {
