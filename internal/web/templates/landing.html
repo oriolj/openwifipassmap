@@ -242,6 +242,10 @@
   </div>
 
   <script>
+  // Landing-page app: map, auth, add/edit, reviews, offline pack, settings,
+  // my-spots, SW registration. Inline in the template on purpose (no JS build
+  // step; everything same-origin for the service worker). If this script grows
+  // past ~1500 lines, split it into a static /static/app.js instead.
   (function () {
     // Build nodes with textContent — spot fields are attacker-controllable.
     function el(tag, className, text) {
@@ -1167,40 +1171,34 @@
         }
       }
 
-      document.getElementById('pw-form').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        settingsError.classList.add('hidden');
-        try {
-          const data = await authedPost('/api/me/password', {
-            current_password: document.getElementById('pw-current').value,
-            new_password: document.getElementById('pw-new').value,
-          });
-          settingsModal.close();
-          showToast(data.message || 'Password updated.');
-        } catch (err) { settingsFail(err.message); }
-      });
+      // All three settings actions share one shape: POST, close, toast on
+      // success; inline error on failure.
+      function settingsAction(path, buildBody, fallbackMsg) {
+        return async (e) => {
+          if (e && e.preventDefault) e.preventDefault();
+          settingsError.classList.add('hidden');
+          try {
+            const data = await authedPost(path, buildBody());
+            settingsModal.close();
+            showToast(data.message || fallbackMsg);
+          } catch (err) { settingsFail(err.message); }
+        };
+      }
 
-      document.getElementById('email-form').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        settingsError.classList.add('hidden');
-        try {
-          const data = await authedPost('/api/me/email', {
-            email: document.getElementById('email-new').value.trim(),
-            password: document.getElementById('email-password').value,
-          });
-          settingsModal.close();
-          showToast(data.message || 'Email updated.');
-        } catch (err) { settingsFail(err.message); }
-      });
+      document.getElementById('pw-form').addEventListener('submit',
+        settingsAction('/api/me/password', () => ({
+          current_password: document.getElementById('pw-current').value,
+          new_password: document.getElementById('pw-new').value,
+        }), 'Password updated.'));
 
-      document.getElementById('settings-resend').addEventListener('click', async () => {
-        settingsError.classList.add('hidden');
-        try {
-          const data = await authedPost('/api/auth/resend-verification', {});
-          settingsModal.close();
-          showToast(data.message || 'Verification email sent.');
-        } catch (err) { settingsFail(err.message); }
-      });
+      document.getElementById('email-form').addEventListener('submit',
+        settingsAction('/api/me/email', () => ({
+          email: document.getElementById('email-new').value.trim(),
+          password: document.getElementById('email-password').value,
+        }), 'Email updated.'));
+
+      document.getElementById('settings-resend').addEventListener('click',
+        settingsAction('/api/auth/resend-verification', () => ({}), 'Verification email sent.'));
 
       document.getElementById('settings-close').addEventListener('click', () => settingsModal.close());
 

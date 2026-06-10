@@ -65,6 +65,19 @@ make docker-build      # docker build -f docker/Dockerfile -t openwifipassmap:la
      `REPLICA_BUCKET`, `REPLICA_ENDPOINT`
 5. App listens on `0.0.0.0` (it does — `ADDR=:8080`), required for Traefik.
 
+## Admin access
+
+There is no admin-creation endpoint. Two bootstrap rules (in
+`internal/store`, covered by tests):
+
+- **Fresh database**: the first account ever registered becomes the admin.
+- **Existing database with no admin**: on boot, `EnsureAdmin` promotes the
+  *oldest* account — on this deployment that is the operator's own account.
+
+The admin sees the moderation console at `/admin` (log in on the map page
+first; the console uses the same browser session). Further admins require a
+manual `UPDATE users SET is_admin = 1 …` against the DB.
+
 ## Litestream (backup / restore)
 
 Litestream is baked into the image. The entrypoint

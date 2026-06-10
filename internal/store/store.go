@@ -193,9 +193,11 @@ func (s *Store) CreateUser(ctx context.Context, username, email, passwordHash st
 		CreatedAt:    nowMS(),
 	}
 	u.UpdatedAt = u.CreatedAt
-	// The very first account becomes the admin (operator bootstrap — there is
-	// no other way to mint one). Subsequent accounts are regular users. No
-	// race: the pool is capped at one connection, so writes serialize.
+	// Operator bootstrap: the very first account becomes the admin — there is
+	// no other way to mint one. (EnsureAdmin is the companion path for DBs that
+	// predate this rule; docs/deployment.md "Admin access" documents both.)
+	// Subsequent accounts are regular users. No race: the pool is capped at
+	// one connection, so writes serialize.
 	if err := s.db.QueryRowContext(ctx,
 		`SELECT NOT EXISTS (SELECT 1 FROM users)`).Scan(&u.IsAdmin); err != nil {
 		return nil, err

@@ -22,6 +22,7 @@ import (
 
 	"github.com/oriolj/openwifipassmap/internal/auth"
 	"github.com/oriolj/openwifipassmap/internal/email"
+	"github.com/oriolj/openwifipassmap/internal/httpx"
 	"github.com/oriolj/openwifipassmap/internal/models"
 	"github.com/oriolj/openwifipassmap/internal/store"
 )
@@ -513,26 +514,9 @@ func (a *API) forgotPassword(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"message": generic})
 }
 
-// publicBase returns the origin to use for links in emails. A configured
-// baseURL (PUBLIC_BASE_URL) is authoritative; otherwise it's derived from the
-// incoming request so links use whatever host the user actually hit — including
-// behind a TLS-terminating proxy like Coolify's Traefik (X-Forwarded-Proto/Host).
-// Set PUBLIC_BASE_URL in prod to be immune to Host-header spoofing.
+// publicBase returns the origin for links in emails (see httpx.PublicBase).
 func (a *API) publicBase(r *http.Request) string {
-	if a.baseURL != "" {
-		return a.baseURL
-	}
-	scheme := "http"
-	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
-		scheme = proto
-	} else if r.TLS != nil {
-		scheme = "https"
-	}
-	host := r.Host
-	if fwd := r.Header.Get("X-Forwarded-Host"); fwd != "" {
-		host = fwd
-	}
-	return scheme + "://" + host
+	return httpx.PublicBase(r, a.baseURL)
 }
 
 // sendMailAsync dispatches an email on a background goroutine so the request

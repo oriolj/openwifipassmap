@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oriolj/openwifipassmap/internal/httpx"
 	"github.com/oriolj/openwifipassmap/internal/models"
 	"github.com/oriolj/openwifipassmap/internal/store"
 )
@@ -47,23 +48,10 @@ func New(s *store.Store, staticDir, baseURL string) (*Web, error) {
 	return &Web{store: s, tmpl: t, staticDir: staticDir, baseURL: strings.TrimRight(baseURL, "/")}, nil
 }
 
-// publicBase mirrors the API's helper: the configured origin wins; otherwise
-// derive scheme/host from the request (honoring the proxy's X-Forwarded-*).
+// publicBase returns the origin for canonical URLs and the sitemap (see
+// httpx.PublicBase).
 func (web *Web) publicBase(r *http.Request) string {
-	if web.baseURL != "" {
-		return web.baseURL
-	}
-	scheme := "http"
-	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
-		scheme = proto
-	} else if r.TLS != nil {
-		scheme = "https"
-	}
-	host := r.Host
-	if fwd := r.Header.Get("X-Forwarded-Host"); fwd != "" {
-		host = fwd
-	}
-	return scheme + "://" + host
+	return httpx.PublicBase(r, web.baseURL)
 }
 
 // humanizeAgo turns a unix-millisecond timestamp into a short relative string
@@ -238,17 +226,15 @@ func (web *Web) sitemap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	base := web.publicBase(r)
-	var b strings.Builder
-	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
-	b.WriteString(`<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">` + "\n")
-	b.WriteString("  <url><loc>" + xmlEscape(base+"/") + "</loc></url>\n")
-	for _, e := range entries {
-		b.WriteString("  <url><loc>" + xmlEscape(base+"/s/"+e.ID) + "</loc><lastmod>" +
-			time.UnixMilli(e.UpdatedAt).UTC().Format("2006-01-02") + "</lastmod></url>\n")
-	}
-	b.WriteString("</urlset>\n")
 	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
-	_, _ = w.Write([]byte(b.String()))
+	_, _ = fmt.Fprintf(w, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"+
+		"<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n")
+	_, _ = fmt.Fprintf(w, "  <url><loc>%s</loc></url>\n", xmlEscape(base+"/"))
+	for _, e := range entries {
+		_, _ = fmt.Fprintf(w, "  <url><loc>%s</loc><lastmod>%s</lastmod></url>\n",
+			xmlEscape(base+"/s/"+e.ID), time.UnixMilli(e.UpdatedAt).UTC().Format("2006-01-02"))
+	}
+	_, _ = fmt.Fprintf(w, "</urlset>\n")
 }
 
 // robots allows everything except the API and the magic-link pages, blocks a

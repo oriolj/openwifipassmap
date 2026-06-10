@@ -83,10 +83,12 @@ where it's an explicit user action.
 
 ### Versioning & update flow
 
-- `CACHE_VERSION` constant at the top of `sw.js`. **Bump it whenever the shell
-  contents change** (new vendored lib, renamed CSS). Activation deletes every
-  `owpm-shell-*` / `owpm-tiles-*` cache that doesn't match the current names —
-  the equivalent of Workbox's `cleanupOutdatedCaches`.
+- `CACHE_VERSION` is **stamped automatically at build time**: `web/vendor.mjs`
+  hashes the shell contents (compiled CSS, every vendored file, the worker
+  source) and writes the digest into the served `sw.js`. Any shell change ⇒ new
+  cache name; activation deletes every `owpm-shell-*` / `owpm-tiles-*` cache
+  that doesn't match — the equivalent of Workbox's `cleanupOutdatedCaches`,
+  with no manual version bump to forget.
 - Updates are **prompted, never silent**: when a new SW is installed while an
   old one controls the page, the landing page shows a toast — "New version
   available · Reload". Accepting posts `{type:"SKIP_WAITING"}` to the worker
@@ -204,9 +206,10 @@ the fields above ✓, registered SW with a `fetch` handler ✓.
 
 ## Operational notes
 
-- **Bump `CACHE_VERSION`** in `web/sw.js` when shell assets change. Deploys
-  that only change server code or API behavior don't need a bump (navigations
-  are network-first; HTML is always fresh online).
+- `CACHE_VERSION` is stamped from the shell-asset hash on every `make css` /
+  Docker build — nothing to bump manually. Deploys that only change server
+  code or API behavior don't invalidate the shell (navigations are
+  network-first; HTML is always fresh online).
 - `make css` (or any `make start`/e2e run) copies `sw.js` + manifest from
   `web/` into `internal/web/static/`; the Go server serves them at root paths
   (`/sw.js`, `/manifest.webmanifest`) with no-cache headers.

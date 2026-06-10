@@ -2,10 +2,11 @@
 // and the precache list is ten stable URLs — see docs/pwa-offline.md for the
 // full design (strategies table, versioning rules, why /api is never cached).
 //
-// BUMP CACHE_VERSION whenever the shell contents change (CSS rename, new
-// vendored lib). Activation drops every cache that doesn't match.
-const CACHE_VERSION = 1;
-const SHELL_CACHE = `owpm-shell-v${CACHE_VERSION}`;
+// CACHE_VERSION is stamped by web/vendor.mjs at build time with a hash of the
+// shell assets (app.css, vendored libs, this file) — no manual bump needed:
+// any shell change yields a new cache name and activation drops old caches.
+const CACHE_VERSION = "__BUILD_HASH__";
+const SHELL_CACHE = `owpm-shell-${CACHE_VERSION}`;
 const TILE_CACHE = "owpm-tiles-v1";
 const TILE_MAX_ENTRIES = 600; // ~6-15 MB; polite to OSM, fits iOS quota
 
