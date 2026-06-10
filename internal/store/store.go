@@ -335,7 +335,10 @@ func (s *Store) CreateSpot(ctx context.Context, sp *models.Spot) (*models.Spot, 
 			sp.ID, sp.CreatedBy, sp.Quality, sp.DownMbps, sp.UpMbps, sp.PingMS, sp.CreatedAt, sp.CreatedAt); err != nil {
 			return nil, err
 		}
-		sp.RatingsCount = boolToInt(sp.Quality > 0)
+		// Keep the create response's aggregates accurate without a re-read.
+		if sp.Quality > 0 {
+			sp.RatingsCount = 1
+		}
 		sp.MyRating = sp.Quality
 	}
 	return sp, nil
@@ -353,13 +356,6 @@ func (s *Store) GetSpot(ctx context.Context, id, viewerID string) (*models.Spot,
 		return nil, err
 	}
 	return sp, nil
-}
-
-func boolToInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }
 
 // ownedSpot returns an existing spot owned by createdBy with the same SSID and

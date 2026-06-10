@@ -5,7 +5,9 @@ Guidance for AI agents working in this repo. Read this first.
 ## What this is
 
 A crowdsourced directory of **public** WiFi spots (cafés, venues) with network
-name, password, location, notes, optional speeds. Four parts: a Go+SQLite
+name, password, location, notes, plus community **reviews** (1-3★ quality
+rating and speed measurements, per spot+user; the spot row caches quality =
+rounded avg rating, speed = latest measurement). Four parts: a Go+SQLite
 backend (JSON API + server-rendered public web), a Capacitor/React mobile app, a
 Go CLI (`wifispot`), and the public web served by the backend.
 

@@ -339,6 +339,14 @@
 
     // Leaflet is loaded via `defer`; wait for it before initialising.
     window.addEventListener('DOMContentLoaded', () => {
+      // Session storage keys — defined first so the map loaders below can read
+      // the token (authed reads return viewer fields like my_rating).
+      const TOKEN_KEY = 'owpm_token';
+      const USER_KEY = 'owpm_user';
+      const ID_KEY = 'owpm_user_id'; // owner check for the Edit button
+      const getToken = () => localStorage.getItem(TOKEN_KEY);
+      const getUsername = () => localStorage.getItem(USER_KEY);
+
       const statusEl = document.getElementById('status');
       const resultsEl = document.getElementById('results');
       const initial = parseViewFromURL();
@@ -399,7 +407,7 @@
         try {
           const r = radiusKm();
           // Authed reads also return viewer fields (my_rating) for prefills.
-          const token = localStorage.getItem('owpm_token');
+          const token = getToken();
           const res = await fetch(`/api/spots/area?lat=${c.lat}&lng=${c.lng}&radius_km=${r.toFixed(2)}`,
             token ? { headers: { 'Authorization': 'Bearer ' + token } } : undefined);
           if (my !== reqToken) return;
@@ -465,9 +473,8 @@
 
       // ---- Accounts + adding spots -------------------------------------
       // The public API is the same one the mobile app and CLI use: auth via
-      // bearer token (kept in localStorage), spots posted to /api/spots.
-      const TOKEN_KEY = 'owpm_token';
-      const USER_KEY = 'owpm_user';
+      // bearer token (kept in localStorage, keys defined at the top), spots
+      // posted to /api/spots.
       const accountEl = document.getElementById('account');
       const authModal = document.getElementById('auth-modal');
       const addModal = document.getElementById('add-modal');
@@ -494,9 +501,6 @@
       const reviewUp = document.getElementById('review-up');
       const reviewPing = document.getElementById('review-ping');
 
-      const ID_KEY = 'owpm_user_id'; // owner check for the Edit button
-      const getToken = () => localStorage.getItem(TOKEN_KEY);
-      const getUsername = () => localStorage.getItem(USER_KEY);
       myUserId = localStorage.getItem(ID_KEY);
 
       // Optional non-negative numbers: null (omit) when blank/invalid.
