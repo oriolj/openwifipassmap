@@ -66,6 +66,12 @@ only hashed secret in the system is a user's *account login password*
   server (5173) and backend (8080) are different origins.
 - **SQLite is single-writer.** WAL + `busy_timeout` handle it; serialize writes.
   See `docs/sqlite.md`.
+- **Geocoding (address/town/POI search) is proxied**, never called directly from
+  a client: `GET /api/geocode?q=...` (`internal/api/geocode.go`) forwards to
+  Nominatim with a policy-compliant User-Agent, a global 1 req/s outbound
+  throttle, and a short in-memory cache — all enforced server-side so every
+  caller (public web, mobile app) automatically respects Nominatim's usage
+  policy. `GEOCODE_URL` overrides the upstream (self-hosted Nominatim, tests).
 
 ## How to run / verify
 

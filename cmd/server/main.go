@@ -81,6 +81,9 @@ func main() {
 
 	mux := http.NewServeMux()
 	a := api.New(st, *dev, log, mailer, baseURL)
+	if geocodeURL := env("GEOCODE_URL", ""); geocodeURL != "" {
+		a.SetGeocodeUpstream(geocodeURL)
+	}
 	a.Routes(mux)
 
 	// Compiled CSS + vendored JS (built by `make css`); see web/ and the

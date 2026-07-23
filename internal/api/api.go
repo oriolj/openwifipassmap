@@ -50,6 +50,7 @@ type API struct {
 	dummyHash string // verified against on unknown-user login to equalize timing
 	mailer    email.Sender
 	baseURL   string // public origin for links in emails, no trailing slash
+	geo       *geocoder
 }
 
 // New returns an API. allowCORS enables permissive CORS for local dev. mailer
@@ -72,7 +73,15 @@ func New(s *store.Store, allowCORS bool, log *slog.Logger, mailer email.Sender, 
 		dummyHash: dummy,
 		mailer:    mailer,
 		baseURL:   strings.TrimRight(baseURL, "/"),
+		geo:       newGeocoder("https://nominatim.openstreetmap.org/search"),
 	}
+}
+
+// SetGeocodeUpstream overrides the geocoding upstream (default: Nominatim's
+// public search API). Used to point at a self-hosted Nominatim instance, or
+// a fake server in tests.
+func (a *API) SetGeocodeUpstream(base string) {
+	a.geo.base = base
 }
 
 // Routes registers the API routes on the given mux under /api/.
@@ -88,6 +97,12 @@ func (a *API) Routes(mux *http.ServeMux) {
 	limited := func(rl *rateLimiter, f http.HandlerFunc) http.HandlerFunc { return a.rateLimit(rl, f) }
 
 	mux.HandleFunc("GET /api/health", a.health)
+
+	// Geocoding is anonymous but still needs an abuse brake: it fans out to a
+	// third-party service (Nominatim) with its own usage policy, enforced
+	// globally by the geocoder itself (see geocode.go).
+	geocodeRL := newRateLimiter(10, 3*time.Second) // 10 burst, 20/min sustained
+	mux.HandleFunc("GET /api/geocode", limited(geocodeRL, a.geocode))
 	mux.HandleFunc("POST /api/auth/register", limited(authRL, a.register))
 	mux.HandleFunc("POST /api/auth/login", limited(authRL, a.login))
 	mux.HandleFunc("POST /api/auth/logout", h(a.logout))

@@ -174,6 +174,21 @@ export async function nearby(lat: number, lng: number, radiusKm = 10): Promise<N
   );
 }
 
+export interface GeocodeResult {
+  name: string;
+  display_name: string;
+  lat: number;
+  lng: number;
+  bbox?: [number, number, number, number]; // [minLat, maxLat, minLng, maxLng]
+}
+
+export async function geocode(q: string): Promise<GeocodeResult[]> {
+  const r = await request<{ results: GeocodeResult[] }>(
+    `/api/geocode?q=${encodeURIComponent(q)}`,
+  );
+  return r.results;
+}
+
 export async function createSpot(input: SpotInput): Promise<Spot> {
   return request<Spot>("/api/spots", {
     method: "POST",

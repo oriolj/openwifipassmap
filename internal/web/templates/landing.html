@@ -44,6 +44,20 @@
     <div class="relative flex-1 min-h-0">
       <div id="map" class="absolute inset-0"></div>
 
+      <!-- Address/town/POI search: overlaid on the map (not in the scrollable
+           toolbar below) so its dropdown of matches isn't clipped. -->
+      <div id="search-form" data-testid="search-form" class="dropdown absolute top-2 left-2 z-[1000]">
+        <form class="join">
+          <input id="search-input" data-testid="search-input" type="search" autocomplete="off"
+                 class="input input-bordered input-sm join-item w-40 sm:w-56 bg-base-100"
+                 placeholder="Search address or place">
+          <button type="submit" data-testid="search-submit" class="btn btn-sm btn-primary join-item"
+                  title="Search address, town, or place">🔍</button>
+        </form>
+        <ul id="search-results" data-testid="search-results"
+            class="dropdown-content menu bg-base-100 rounded-box shadow z-[1100] w-72 p-1 hidden mt-1"></ul>
+      </div>
+
       <!-- Location-pick bar: shown while the user is placing a new spot's pin. -->
       <div id="pick-bar" data-testid="pick-bar"
            class="hidden absolute top-2 left-1/2 -translate-x-1/2 z-[1000] w-[92%] max-w-md
@@ -652,6 +666,75 @@
       }
 
       document.getElementById('locate').addEventListener('click', () => tryGeolocate(true));
+
+      // ---- Address / town / POI search: geocode via the same-origin proxy
+      // (/api/geocode → Nominatim, throttled server-side) and center the map.
+      // flyTo/flyToBounds fire moveend, which reloads spots for the new area —
+      // no separate loadSpots() call needed here.
+      const searchForm = document.querySelector('#search-form form');
+      const searchInput = document.getElementById('search-input');
+      const searchResultsEl = document.getElementById('search-results');
+
+      function hideSearchResults() {
+        searchResultsEl.classList.add('hidden');
+        searchResultsEl.replaceChildren();
+      }
+
+      function goToPlace(r) {
+        hideSearchResults();
+        if (Array.isArray(r.bbox) && r.bbox.length === 4) {
+          const [minLat, maxLat, minLng, maxLng] = r.bbox;
+          map.flyToBounds([[minLat, minLng], [maxLat, maxLng]], { maxZoom: 17 });
+        } else {
+          map.flyTo([r.lat, r.lng], 15);
+        }
+      }
+
+      function showSearchResults(results) {
+        searchResultsEl.replaceChildren();
+        for (const r of results) {
+          const li = el('li');
+          const btn = el('button', '', r.display_name || r.name);
+          btn.type = 'button';
+          btn.dataset.testid = 'search-result';
+          btn.addEventListener('click', () => goToPlace(r));
+          li.appendChild(btn);
+          searchResultsEl.appendChild(li);
+        }
+        searchResultsEl.classList.remove('hidden');
+      }
+
+      searchForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const q = searchInput.value.trim();
+        hideSearchResults();
+        if (!q) return;
+        try {
+          const res = await fetch('/api/geocode?q=' + encodeURIComponent(q));
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'server returned ' + res.status);
+          const results = data.results || [];
+          if (results.length === 0) {
+            showToast(`No places found for "${q}"`, 'warning');
+          } else if (results.length === 1) {
+            goToPlace(results[0]);
+          } else {
+            showSearchResults(results);
+          }
+        } catch (err) {
+          showToast('Search failed: ' + (err && err.message ? err.message : 'unknown'), 'error');
+        }
+      });
+
+      searchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          searchInput.value = '';
+          hideSearchResults();
+          searchInput.blur();
+        }
+      });
+
+      map.on('movestart', hideSearchResults);
 
       // If the URL already specifies a view (shared link), honor it and skip
       // silent geolocation. Otherwise try geolocation silently; on success,

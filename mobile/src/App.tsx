@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  type GeocodeResult,
   type Spot,
   type User,
   confirmSpot,
   createSpot,
   forgotPassword,
+  geocode,
   getMe,
   getStoredUser,
   login,
@@ -253,10 +255,13 @@ function NearbyView({ user }: { user: User | null }) {
   const [spots, setSpots] = useState<Spot[] | null>(null);
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
+  const [query, setQuery] = useState("");
+  const [choices, setChoices] = useState<GeocodeResult[] | null>(null);
 
   async function find() {
     setBusy(true);
     setStatus("Locating…");
+    setChoices(null);
     try {
       const { lat, lng } = await getCurrentPosition();
       setStatus("Loading nearby spots…");
@@ -265,6 +270,47 @@ function NearbyView({ user }: { user: User | null }) {
       setStatus(res.count === 0 ? "No spots nearby yet — add the first one!" : `${res.count} spot(s) nearby`);
     } catch (err) {
       setStatus(err instanceof Error ? err.message : "Could not get location");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadNear(c: GeocodeResult) {
+    const name = c.name || c.display_name;
+    setChoices(null);
+    setBusy(true);
+    setStatus(`Loading spots near ${name}…`);
+    try {
+      const res = await nearby(c.lat, c.lng, 25);
+      setSpots(res.results);
+      setStatus(res.count === 0 ? `No spots near ${name} yet — add the first one!` : `${res.count} spot(s) near ${name}`);
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : "Could not load nearby spots");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function search(e: React.FormEvent) {
+    e.preventDefault();
+    const q = query.trim();
+    if (!q) return;
+    setBusy(true);
+    setChoices(null);
+    setStatus("Searching…");
+    try {
+      const results = await geocode(q);
+      if (results.length === 0) {
+        setStatus(`No places found for "${q}"`);
+      } else if (results.length === 1) {
+        await loadNear(results[0]);
+        return;
+      } else {
+        setChoices(results);
+        setStatus(`${results.length} matches — pick one`);
+      }
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : "Search failed");
     } finally {
       setBusy(false);
     }
@@ -281,6 +327,29 @@ function NearbyView({ user }: { user: User | null }) {
       <button className="btn btn-primary w-full" data-testid="locate-btn" onClick={find} disabled={busy}>
         {busy ? "…" : "Find WiFi near me"}
       </button>
+      <form className="join w-full mt-2" onSubmit={search}>
+        <input
+          className="input input-bordered join-item flex-1"
+          data-testid="search-input"
+          placeholder="Search a town, address, or place"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <button className="btn btn-primary join-item" data-testid="search-submit" disabled={busy}>
+          Search
+        </button>
+      </form>
+      {choices && (
+        <ul className="menu bg-base-100 rounded-box shadow mt-1" data-testid="search-results">
+          {choices.map((c, i) => (
+            <li key={i}>
+              <button type="button" data-testid="search-result" onClick={() => loadNear(c)}>
+                {c.display_name || c.name}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
       <p className="text-sm opacity-60 my-2" data-testid="status">
         {status}
       </p>
