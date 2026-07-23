@@ -45,8 +45,9 @@
       <div id="map" class="absolute inset-0"></div>
 
       <!-- Address/town/POI search: overlaid on the map (not in the scrollable
-           toolbar below) so its dropdown of matches isn't clipped. -->
-      <div id="search-form" data-testid="search-form" class="dropdown absolute top-2 left-2 z-[1000]">
+           toolbar below) so its dropdown of matches isn't clipped. Top-right,
+           opposite Leaflet's default top-left zoom control. -->
+      <div id="search-form" data-testid="search-form" class="dropdown dropdown-end absolute top-2 right-2 z-[1000]">
         <form class="join">
           <input id="search-input" data-testid="search-input" type="search" autocomplete="off"
                  class="input input-bordered input-sm join-item w-40 sm:w-56 bg-base-100"
