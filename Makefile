@@ -129,8 +129,16 @@ tmux: ## Attach to (or create) the project tmux session
 		send-keys 'make mobile' C-m \; \
 		select-pane -t 0
 
-tmux-new-session: ## Join the session via a grouped session (shared windows, own view)
-	@tmux new-session -t $(TMUX_SESSION) \; set-option destroy-unattached on 2>/dev/null || $(MAKE) tmux
+tmux-d: ## Same as tmux, but detach every other client first (this terminal gets the full screen)
+	@tmux new-session -A -D -s $(TMUX_SESSION)
+
+tmux-n: ## Attach via a grouped session (independent navigation, shared windows/panes)
+	@tmux has-session -t $(TMUX_SESSION) 2>/dev/null && \
+		tmux new-session -t $(TMUX_SESSION) \; set-option destroy-unattached on || \
+		tmux new-session -A -s $(TMUX_SESSION)
+
+tmux-new-session: ## Old name of tmux-n
+	@$(MAKE) --no-print-directory tmux-n
 
 clean: ## Remove build artifacts and local DB
 	@rm -rf bin dist data/*.db data/*.db-wal data/*.db-shm
