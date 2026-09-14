@@ -7,7 +7,13 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/server ./cmd/server
+# Release identifier: Coolify passes SOURCE_COMMIT (the deployed commit) as a
+# build arg; baked into internal/buildinfo so /api/health, X-App-Version,
+# openwifipassmap_app_info and the GlitchTip release all agree.
+ARG SOURCE_COMMIT=dev
+RUN CGO_ENABLED=0 go build \
+    -ldflags="-s -w -X github.com/oriolj/openwifipassmap/internal/buildinfo.Version=$(echo "$SOURCE_COMMIT" | cut -c1-12)" \
+    -o /out/server ./cmd/server
 
 # Compile Tailwind+DaisyUI and vendor leaflet (templates are scanned for class
 # names, so they're copied alongside). Output: /internal/web/static.
@@ -26,12 +32,12 @@ RUN apk add --no-cache wget ca-certificates && \
 USER app
 WORKDIR /app
 COPY --from=build /out/server /app/server
-# Litestream: continuous SQLite replication to S3-compatible storage. The
-# entrypoint activates it only when LITESTREAM_ACCESS_KEY_ID is set, so the
-# image runs fine locally without credentials.
-COPY --from=litestream/litestream:0.3 /usr/local/bin/litestream /usr/local/bin/litestream
+# Litestream: the server always runs under it (docker/entrypoint.sh) — S3/R2
+# replica when LITESTREAM_ACCESS_KEY_ID is set, local file replica otherwise.
+COPY --from=litestream/litestream:0.3.14 /usr/local/bin/litestream /usr/local/bin/litestream
 COPY --chmod=755 docker/entrypoint.sh /app/entrypoint.sh
 COPY docker/litestream.yml /etc/litestream.yml
+COPY docker/litestream-file.yml /etc/litestream-file.yml
 COPY --from=assets /internal/web/static /app/static
 
 ENV ADDR=:8080 \

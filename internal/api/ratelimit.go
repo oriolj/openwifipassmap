@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/oriolj/openwifipassmap/internal/metrics"
 )
 
 // rateLimiter is a per-key token bucket: each key gets `burst` tokens that
@@ -90,6 +92,7 @@ func clientIP(r *http.Request) string {
 func (a *API) rateLimit(rl *rateLimiter, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !rl.allow(clientIP(r)) {
+			metrics.RateLimited.WithLabelValues(r.Pattern).Inc()
 			writeErr(w, http.StatusTooManyRequests, "too many requests — try again later")
 			return
 		}

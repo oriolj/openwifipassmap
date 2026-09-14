@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/oriolj/openwifipassmap/internal/metrics"
 )
 
 // geocodeResult is the trimmed shape sent to clients: floats parsed
@@ -122,12 +124,14 @@ func (g *geocoder) cacheSet(key string, results []geocodeResult) {
 func (g *geocoder) search(ctx context.Context, q, lang string) ([]geocodeResult, error) {
 	key := g.cacheKey(q, lang)
 	if results, ok := g.cacheGet(key); ok {
+		metrics.Geocode.WithLabelValues("cache").Inc()
 		return results, nil
 	}
 
 	select {
 	case g.queue <- struct{}{}:
 	default:
+		metrics.Geocode.WithLabelValues("busy").Inc()
 		return nil, errGeocodeBusy
 	}
 	defer func() { <-g.queue }()
@@ -137,6 +141,7 @@ func (g *geocoder) search(ctx context.Context, q, lang string) ([]geocodeResult,
 
 	// Re-check the cache: another waiter may have just populated it.
 	if results, ok := g.cacheGet(key); ok {
+		metrics.Geocode.WithLabelValues("cache").Inc()
 		return results, nil
 	}
 
@@ -153,8 +158,10 @@ func (g *geocoder) search(ctx context.Context, q, lang string) ([]geocodeResult,
 	results, err := g.fetch(ctx, q, lang)
 	g.last = time.Now()
 	if err != nil {
+		metrics.Geocode.WithLabelValues("error").Inc()
 		return nil, err
 	}
+	metrics.Geocode.WithLabelValues("upstream").Inc()
 	g.cacheSet(key, results)
 	return results, nil
 }

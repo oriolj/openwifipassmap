@@ -55,6 +55,12 @@ func Open(path string) (*Store, error) {
 // Close closes the underlying database.
 func (s *Store) Close() error { return s.db.Close() }
 
+// Ping verifies the database answers a trivial query (the /api/health check).
+func (s *Store) Ping(ctx context.Context) error {
+	var one int
+	return s.db.QueryRowContext(ctx, `SELECT 1`).Scan(&one)
+}
+
 // Migrate applies the given schema SQL (expects IF NOT EXISTS statements).
 func (s *Store) Migrate(ctx context.Context, schema string) error {
 	_, err := s.db.ExecContext(ctx, schema)
@@ -889,4 +895,67 @@ func (s *Store) CreateReport(ctx context.Context, spotID, reason, reporterID str
 		return nil, err
 	}
 	return r, nil
+}
+
+// Stats is the per-scrape business snapshot behind the openwifipassmap_*
+// product metrics (internal/metrics). Every field is one small aggregate
+// over indexed columns — the tables are tiny and the store has a single
+// connection, so this runs in a few milliseconds and never at request time.
+type Stats struct {
+	Spots           int64
+	SpotsByQuality  map[int]int64 // 0 = unrated … 3 = great
+	SpotsCreated24h int64
+	SpotsCreated7d  int64
+	Users           int64
+	UsersVerified   int64
+	UsersCreated24h int64
+	UsersCreated7d  int64
+	Reviews         int64
+	Confirmations   int64
+	Reports         int64
+	ActiveSessions  int64
+}
+
+// Stats computes the business snapshot. now is injectable for tests.
+func (s *Store) Stats(ctx context.Context, now time.Time) (*Stats, error) {
+	st := &Stats{SpotsByQuality: map[int]int64{}}
+	ms := now.UnixMilli()
+	day := ms - 24*time.Hour.Milliseconds()
+	week := ms - 7*24*time.Hour.Milliseconds()
+	scalars := []struct {
+		dst  *int64
+		q    string
+		args []any
+	}{
+		{&st.Spots, `SELECT count(*) FROM spots`, nil},
+		{&st.SpotsCreated24h, `SELECT count(*) FROM spots WHERE created_at >= ?`, []any{day}},
+		{&st.SpotsCreated7d, `SELECT count(*) FROM spots WHERE created_at >= ?`, []any{week}},
+		{&st.Users, `SELECT count(*) FROM users`, nil},
+		{&st.UsersVerified, `SELECT count(*) FROM users WHERE email_verified = 1`, nil},
+		{&st.UsersCreated24h, `SELECT count(*) FROM users WHERE created_at >= ?`, []any{day}},
+		{&st.UsersCreated7d, `SELECT count(*) FROM users WHERE created_at >= ?`, []any{week}},
+		{&st.Reviews, `SELECT count(*) FROM reviews`, nil},
+		{&st.Confirmations, `SELECT count(*) FROM confirmations`, nil},
+		{&st.Reports, `SELECT count(*) FROM reports`, nil},
+		{&st.ActiveSessions, `SELECT count(*) FROM sessions WHERE expires_at > ?`, []any{ms}},
+	}
+	for _, sc := range scalars {
+		if err := s.db.QueryRowContext(ctx, sc.q, sc.args...).Scan(sc.dst); err != nil {
+			return nil, err
+		}
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT quality, count(*) FROM spots GROUP BY quality`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var q int
+		var n int64
+		if err := rows.Scan(&q, &n); err != nil {
+			return nil, err
+		}
+		st.SpotsByQuality[q] = n
+	}
+	return st, rows.Err()
 }

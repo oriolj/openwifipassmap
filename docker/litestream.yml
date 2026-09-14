@@ -1,17 +1,36 @@
-# Litestream config for continuous SQLite backup to S3-compatible storage.
-# See docs/deployment.md for how to wrap the server with:
-#   litestream replicate -exec "/app/server"
+# Litestream config — production: continuous SQLite replication to an
+# S3-compatible bucket (Cloudflare R2) PLUS a local file replica.
+# Selected by docker/entrypoint.sh when LITESTREAM_ACCESS_KEY_ID is set;
+# without credentials the entrypoint uses litestream-file.yml (file replica
+# only — same disk, NOT a backup, but a consistent copy the host-side rsync
+# job can carry off-box). Restore recipes: DEPLOY.md «Backups».
 #
-# Env vars expected (set as runtime-only secrets in Coolify):
-#   LITESTREAM_ACCESS_KEY_ID, LITESTREAM_SECRET_ACCESS_KEY
-#   REPLICA_BUCKET, REPLICA_ENDPOINT (e.g. Backblaze B2 / MinIO)
+# Env vars (runtime-only secrets on the Coolify resource):
+#   LITESTREAM_ACCESS_KEY_ID, LITESTREAM_SECRET_ACCESS_KEY  — the bucket-scoped R2 key
+#   REPLICA_BUCKET   — e.g. coolify-backups-oriolj
+#   REPLICA_PATH     — object prefix inside the bucket (entrypoint default: openwifipassmap/wifispot.db)
+#   REPLICA_ENDPOINT — https://<account>.r2.cloudflarestorage.com
+#
+# `addr` serves Litestream's own Prometheus metrics on loopback; the Go
+# server reads them (LITESTREAM_METRICS_ADDR) and passes the litestream_*
+# families through its /metrics, and its watchdog pings healthchecks.io.
+addr: "127.0.0.1:9091"
 
 dbs:
   - path: /data/wifispot.db
     replicas:
-      - type: s3
+      - name: s3
+        type: s3
         bucket: ${REPLICA_BUCKET}
-        path: wifispot.db
+        path: ${REPLICA_PATH}
         endpoint: ${REPLICA_ENDPOINT}
-        # everysec sync; restore on boot if the local file is missing.
+        region: auto
+        force-path-style: true
         sync-interval: 1s
+        snapshot-interval: 1h
+        retention: 168h
+      - name: file
+        type: file
+        path: /data/replica
+        snapshot-interval: 6h
+        retention: 72h

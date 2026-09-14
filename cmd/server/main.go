@@ -14,8 +14,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/getsentry/sentry-go"
+	sentryhttp "github.com/getsentry/sentry-go/http"
+
 	"github.com/oriolj/openwifipassmap/internal/api"
+	"github.com/oriolj/openwifipassmap/internal/buildinfo"
 	"github.com/oriolj/openwifipassmap/internal/email"
+	"github.com/oriolj/openwifipassmap/internal/litestream"
+	"github.com/oriolj/openwifipassmap/internal/metrics"
 	"github.com/oriolj/openwifipassmap/internal/store"
 	"github.com/oriolj/openwifipassmap/internal/web"
 	"github.com/oriolj/openwifipassmap/migrations"
@@ -36,6 +42,24 @@ func main() {
 	backfillEmail := env("BACKFILL_EMAIL", "oriolj@gmail.com")
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	version := buildinfo.Get()
+
+	// Error tracking (GlitchTip, Sentry-compatible): dormant without a DSN.
+	// environment must equal the oj.env label ("prod"), release the git SHA;
+	// performance tracing stays off (traces go OTel → Tempo, not here).
+	if dsn := env("SENTRY_DSN", ""); dsn != "" {
+		if err := sentry.Init(sentry.ClientOptions{
+			Dsn:              dsn,
+			Release:          version,
+			Environment:      env("SENTRY_ENVIRONMENT", "prod"),
+			TracesSampleRate: 0,
+		}); err != nil {
+			log.Error("sentry init failed", "err", err)
+		} else {
+			log.Info("error tracking enabled", "release", version)
+			defer sentry.Flush(2 * time.Second)
+		}
+	}
 
 	if err := os.MkdirAll(filepath.Dir(*dbPath), 0o755); err != nil {
 		log.Error("cannot create data dir", "err", err)
@@ -79,12 +103,40 @@ func main() {
 
 	mailer := email.New(env("RESEND_API_KEY", ""), env("RESEND_FROM", ""), log)
 
+	// Litestream watchdog: replication pass-through on /metrics + the
+	// healthchecks.io dead-man ping (internal/litestream).
+	ls := litestream.FromEnv(log)
+	if ls.Enabled() {
+		log.Info("running under litestream", "metrics_addr", env("LITESTREAM_METRICS_ADDR", ""),
+			"s3", env("LITESTREAM_ACCESS_KEY_ID", "") != "", "heartbeat", env("HEALTHCHECKS_PING_URL_LITESTREAM", "") != "")
+	} else {
+		log.Warn("not running under litestream: the database is not replicated")
+	}
+
 	mux := http.NewServeMux()
 	a := api.New(st, *dev, log, mailer, baseURL)
 	if geocodeURL := env("GEOCODE_URL", ""); geocodeURL != "" {
 		a.SetGeocodeUpstream(geocodeURL)
 	}
+	a.SetHealthExtra(func() map[string]string {
+		if !ls.Enabled() {
+			return map[string]string{"litestream": "off"}
+		}
+		if _, err := ls.Metrics(context.Background()); err != nil {
+			return map[string]string{"litestream": "error: " + err.Error()}
+		}
+		return map[string]string{"litestream": "ok"}
+	})
 	a.Routes(mux)
+
+	// /metrics: bearer-gated on the public origin (fails closed without
+	// METRICS_TOKEN outside dev); Litestream's own families appended.
+	metricsToken := metrics.TokenFromEnv()
+	if metricsToken == "" && !*dev {
+		log.Warn("METRICS_TOKEN unset: /metrics answers 401 to everyone until it is configured")
+	}
+	metrics.NewStoreCollector(st, *dbPath)
+	mux.Handle("GET /metrics", metrics.Handler(metricsToken, *dev, ls.Metrics))
 
 	// Compiled CSS + vendored JS (built by `make css`); see web/ and the
 	// Dockerfile assets stage. Defaults to the in-repo path for local dev.
@@ -96,7 +148,11 @@ func main() {
 	}
 	webUI.Routes(mux)
 
-	handler := a.Middleware(logRequests(log, mux))
+	// Order, outermost first: sentry (panic capture) → metrics (route label
+	// read from r.Pattern after the mux matched) → CORS → access log → mux.
+	var handler http.Handler = a.Middleware(logRequests(log, version, mux))
+	handler = metrics.Instrument(handler)
+	handler = sentryhttp.New(sentryhttp.Options{Repanic: true}).Handle(handler) // Repanic: net/http still logs the panic
 
 	srv := &http.Server{
 		Addr:              *addr,
@@ -104,8 +160,12 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	wdCtx, wdCancel := context.WithCancel(context.Background())
+	defer wdCancel()
+	go ls.Run(wdCtx, 5*time.Minute)
+
 	go func() {
-		log.Info("listening", "addr", *addr, "db", *dbPath, "dev", *dev)
+		log.Info("listening", "addr", *addr, "db", *dbPath, "dev", *dev, "version", version)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("server error", "err", err)
 			os.Exit(1)
@@ -128,9 +188,12 @@ func env(key, def string) string {
 	return def
 }
 
-func logRequests(log *slog.Logger, next http.Handler) http.Handler {
+// logRequests is the access log (one line per request, Loki-friendly
+// key=value) and stamps the release on every response (X-App-Version).
+func logRequests(log *slog.Logger, version string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
+		w.Header().Set("X-App-Version", version)
 		next.ServeHTTP(w, r)
 		log.Info("req", "method", r.Method, "path", r.URL.Path, "dur", time.Since(start).String())
 	})

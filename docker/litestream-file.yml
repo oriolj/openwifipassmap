@@ -1,0 +1,16 @@
+# Litestream config — no off-host credentials (local docker, CI, or a prod
+# deploy whose R2 secrets are not set yet): replicate to a local file replica
+# only, so (1) the server always runs under the same supervisor as in full
+# production and (2) /data/replica holds a consistent, restorable copy that a
+# host-side rsync job (backupmaker) can carry off the box. Same disk = NOT a
+# backup on its own. See docker/litestream.yml for the production variant.
+addr: "127.0.0.1:9091"
+
+dbs:
+  - path: /data/wifispot.db
+    replicas:
+      - name: file
+        type: file
+        path: /data/replica
+        snapshot-interval: 6h
+        retention: 72h

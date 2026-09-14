@@ -29,6 +29,10 @@ only hashed secret in the system is a user's *account login password*
 - Auth: argon2id (`internal/auth`) + opaque bearer-token sessions in the DB.
 - Mobile UI: **Tailwind + DaisyUI** (CDN for the prototype; compile for production).
 - Run things via the **Makefile** (`make start`, `make tmux`, `make test`, …).
+- Prod questions from the workstation: `make prod-status`, `make prod-metrics`,
+  `make logs-prod*`, `make slow-requests` (estate stack; see GRAFANA_AND_METRICS.md).
+- Never hand-edit the live SQLite file; the server runs under Litestream and
+  `/data` is a bind mount — see DEPLOY.md «Backups» and docs/deployment.md.
 
 ## Layout / where things live
 
@@ -47,6 +51,11 @@ only hashed secret in the system is a user's *account login password*
 | `internal/wifi` | nmcli / networksetup scan + connect (native only) |
 | `internal/models` | shared types + id/token helpers |
 | `migrations/schema.sql` | the schema, embedded via `migrations.Schema` |
+| `internal/metrics` | Prometheus `/metrics` (bearer-gated, fail-closed), HTTP histogram, per-scrape SQLite business collector — catalogue in [METRICS.md](METRICS.md) |
+| `internal/litestream` | watchdog over the in-container Litestream replicator: metrics pass-through + healthchecks.io ping |
+| `internal/buildinfo` | release id (git SHA from the `SOURCE_COMMIT` build arg) |
+| `scripts/` | `prod_status.sh` + `promq.py` behind `make prod-status` |
+| `DEPLOY.md` / `GRAFANA_AND_METRICS.md` / `USER_TODO.md` | where prod runs + status table / what Grafana shows / what only Oriol can do |
 
 ## Gotchas
 

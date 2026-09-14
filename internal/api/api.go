@@ -20,9 +20,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/getsentry/sentry-go"
+
 	"github.com/oriolj/openwifipassmap/internal/auth"
+	"github.com/oriolj/openwifipassmap/internal/buildinfo"
 	"github.com/oriolj/openwifipassmap/internal/email"
 	"github.com/oriolj/openwifipassmap/internal/httpx"
+	"github.com/oriolj/openwifipassmap/internal/metrics"
 	"github.com/oriolj/openwifipassmap/internal/models"
 	"github.com/oriolj/openwifipassmap/internal/store"
 )
@@ -51,7 +55,13 @@ type API struct {
 	mailer    email.Sender
 	baseURL   string // public origin for links in emails, no trailing slash
 	geo       *geocoder
+	// healthExtra adds informational checks to /api/health (never fails it).
+	healthExtra func() map[string]string
 }
+
+// SetHealthExtra registers extra informational entries for /api/health's
+// `checks` (e.g. Litestream replication state).
+func (a *API) SetHealthExtra(f func() map[string]string) { a.healthExtra = f }
 
 // New returns an API. allowCORS enables permissive CORS for local dev. mailer
 // sends transactional email (password resets); baseURL is the public origin
@@ -193,8 +203,30 @@ func (a *API) requireUser(w http.ResponseWriter, r *http.Request) (*models.User,
 
 // ---- handlers ----
 
+// health is the liveness/readiness probe (image HEALTHCHECK, Coolify, Talaia).
+// It carries the release identifier and a real dependency check: a failing
+// SQLite ping answers 503 so a container that cannot read its database is
+// never reported healthy. Replication state is informational only — a
+// degraded backup must not roll a deploy back.
 func (a *API) health(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	status, code := "ok", http.StatusOK
+	checks := map[string]string{"db": "ok"}
+	if err := a.store.Ping(ctx); err != nil {
+		checks["db"] = "error: " + err.Error()
+		status, code = "error", http.StatusServiceUnavailable
+	}
+	if a.healthExtra != nil {
+		for k, v := range a.healthExtra() {
+			checks[k] = v
+		}
+	}
+	writeJSON(w, code, map[string]any{
+		"status":  status,
+		"version": buildinfo.Get(),
+		"checks":  checks,
+	})
 }
 
 type authReq struct {
@@ -536,13 +568,16 @@ func (a *API) publicBase(r *http.Request) string {
 
 // sendMailAsync dispatches an email on a background goroutine so the request
 // returns immediately regardless of the mail provider's latency.
-func (a *API) sendMailAsync(to, subject, html, text string) {
+func (a *API) sendMailAsync(kind, to, subject, html, text string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if err := a.mailer.Send(ctx, to, subject, html, text); err != nil {
 			a.log.Error("send email", "err", err, "to", to, "subject", subject)
+			metrics.Emails.WithLabelValues(kind, "error").Inc()
+			return
 		}
+		metrics.Emails.WithLabelValues(kind, "sent").Inc()
 	}()
 }
 
@@ -557,7 +592,7 @@ func (a *API) sendResetEmail(to, username, link string) {
 		`<p><a href="%s">Reset my password</a></p>`+
 		`<p>This link expires in 1 hour. If you didn't ask for this, you can ignore this email.</p>`,
 		template.HTMLEscapeString(username), template.HTMLEscapeString(link))
-	a.sendMailAsync(to, "Reset your OpenWifiPassMap password", html, text)
+	a.sendMailAsync("reset", to, "Reset your OpenWifiPassMap password", html, text)
 }
 
 func (a *API) sendVerificationEmail(to, username, link string) {
@@ -570,7 +605,7 @@ func (a *API) sendVerificationEmail(to, username, link string) {
 		`<p><a href="%s">Verify my email</a></p>`+
 		`<p>This link expires in 48 hours. If you didn't create this account, you can ignore this email.</p>`,
 		template.HTMLEscapeString(username), template.HTMLEscapeString(link))
-	a.sendMailAsync(to, "Verify your OpenWifiPassMap email", html, text)
+	a.sendMailAsync("verification", to, "Verify your OpenWifiPassMap email", html, text)
 }
 
 // resetPassword consumes a single-use reset token and sets a new password,
@@ -954,6 +989,7 @@ func writeErr(w http.ResponseWriter, status int, msg string) {
 
 func (a *API) serverErr(w http.ResponseWriter, err error) {
 	a.log.Error("server error", "err", err)
+	sentry.CaptureException(err) // no-op until SENTRY_DSN initialises the SDK
 	writeErr(w, http.StatusInternalServerError, "internal server error")
 }
 

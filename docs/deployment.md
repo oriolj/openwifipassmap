@@ -4,32 +4,9 @@ The backend is a single Go service that also serves the public web — deploy it
 a Coolify **Dockerfile** application (not Compose) to get **blue-green** deploys
 (build new container → health-check → swap traffic, zero downtime).
 
-## ⚠️ Pending operator actions
-
-One-time steps still to do in the Coolify UI / provider dashboards. Tick and
-prune as they're done.
-
-- [ ] **Turn on backups (Litestream).** The image ships with Litestream but it
-  only activates when credentials are set. Create an S3-compatible bucket
-  (Backblaze B2 is the cheap default), then set in Coolify (mark the two keys
-  **runtime-only**): `LITESTREAM_ACCESS_KEY_ID`, `LITESTREAM_SECRET_ACCESS_KEY`,
-  `REPLICA_BUCKET`, `REPLICA_ENDPOINT`. Redeploy, then check the container logs
-  for litestream replication lines. Until this is done **prod has no off-host
-  backup**.
-- [ ] **Fire-drill the restore once**: stop a staging container, wipe its
-  `/data`, boot — it should restore from the bucket before serving.
-- [ ] **Pin `PUBLIC_BASE_URL=https://openwifipassmap.oriolj.com`.** Without it
-  email links derive the host from forwarded headers (works, but pinning is
-  immune to Host-header games).
-- [ ] **Confirm `RESEND_API_KEY` is set** (runtime-only). `RESEND_FROM` is
-  optional (defaults to `no-reply@oriolj.com`).
-- [ ] **After the next deploy, do one test signup** — it now sends a
-  verification email (first real Resend traffic); click the `/verify` link and
-  then try forgot-password for that account.
-- [ ] **Re-check the `/data` persistent storage mount** after any resource
-  changes — see the SQLite-persistence footgun below.
-- [ ] Before public launch: Plausible analytics + compiled Tailwind CSS
-  (tracked in [TODO.md](../TODO.md)).
+> **Live deploy facts, env names, backups and the status table are in
+> [DEPLOY.md](../DEPLOY.md) at the repo root; what only Oriol can do is in
+> [USER_TODO.md](../USER_TODO.md).** This page explains the mechanics.
 
 ## Image
 
@@ -38,7 +15,8 @@ static binary, alpine runtime, non-root user, `/data` volume, `HEALTHCHECK` on
 `/api/health`, `STOPSIGNAL SIGTERM`.
 
 ```bash
-make docker-build      # docker build -f docker/Dockerfile -t openwifipassmap:latest .
+make docker-build      # docker build … --build-arg SOURCE_COMMIT=$(git rev-parse --short=12 HEAD)
+make docker-run        # run it locally on :8080 with DEV=1 (file-replica Litestream, /metrics open)
 ```
 
 ## Coolify setup
@@ -62,7 +40,10 @@ make docker-build      # docker build -f docker/Dockerfile -t openwifipassmap:la
    - `BACKFILL_EMAIL` — address stamped onto any pre-email account on first boot
      after the email migration; defaults to `oriolj@gmail.com`.
    - Litestream: `LITESTREAM_ACCESS_KEY_ID`, `LITESTREAM_SECRET_ACCESS_KEY`,
-     `REPLICA_BUCKET`, `REPLICA_ENDPOINT`
+     `REPLICA_BUCKET`, `REPLICA_ENDPOINT` (see below)
+   - `METRICS_TOKEN` (**runtime-only secret**) — bearer for `/metrics`
+     ([METRICS.md](../METRICS.md)); `SENTRY_DSN` — GlitchTip;
+     `HEALTHCHECKS_PING_URL_LITESTREAM` — replication heartbeat
 5. App listens on `0.0.0.0` (it does — `ADDR=:8080`), required for Traefik.
 
 ## Admin access
@@ -80,22 +61,23 @@ manual `UPDATE users SET is_admin = 1 …` against the DB.
 
 ## Litestream (backup / restore)
 
-Litestream is baked into the image. The entrypoint
-([`docker/entrypoint.sh`](../docker/entrypoint.sh)) activates it only when
-`LITESTREAM_ACCESS_KEY_ID` is set: it first restores the DB from the replica if
-the local file is missing (fresh volume / new host), then runs the server under
-`litestream replicate -exec` so every write streams to the bucket. Without
-credentials (local docker, CI) the server runs plain.
+Litestream is baked into the image and **the server always runs under it**
+([`docker/entrypoint.sh`](../docker/entrypoint.sh)): with
+`LITESTREAM_ACCESS_KEY_ID` set it uses [`docker/litestream.yml`](../docker/litestream.yml)
+(S3/R2 replica — the off-host backup — plus a local file replica); without
+credentials it uses [`docker/litestream-file.yml`](../docker/litestream-file.yml)
+(file replica only, `/data/replica`, same disk — a consistent copy for a
+host-side rsync, not a backup). Before serving it restores the DB from the
+newest replica if the local file is missing (fresh volume / new host).
+Misconfigured credentials make the container exit loudly instead of running
+unreplicated — fix the secrets rather than removing them.
 
-Set in Coolify (runtime-only secrets): `LITESTREAM_ACCESS_KEY_ID`,
-`LITESTREAM_SECRET_ACCESS_KEY`, `REPLICA_BUCKET`, `REPLICA_ENDPOINT`
-(e.g. Backblaze B2 / MinIO). Misconfigured credentials make the container exit
-loudly instead of running unreplicated — fix the secrets rather than removing
-them.
-
-Config: [`docker/litestream.yml`](../docker/litestream.yml). Replication lag stays
-under ~1 s; on a fresh container Litestream restores the latest snapshot before
-the server starts. See [sqlite.md](sqlite.md).
+Envs (runtime-only secrets in Coolify): `LITESTREAM_ACCESS_KEY_ID`,
+`LITESTREAM_SECRET_ACCESS_KEY`, `REPLICA_BUCKET`, `REPLICA_ENDPOINT`, optional
+`REPLICA_PATH`. Litestream serves its own metrics on `127.0.0.1:9091`; the
+server passes them through `/metrics` and pings healthchecks.io from a
+watchdog (`internal/litestream`). Restore recipes: [DEPLOY.md](../DEPLOY.md)
+«Backups». See [sqlite.md](sqlite.md).
 
 ## SQLite persistence on Coolify
 
