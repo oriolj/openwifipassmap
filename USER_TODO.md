@@ -11,10 +11,12 @@ sets everything on the app and redeploys it:
 - [ ] **App: metrics token + GlitchTip DSN + Litestream → R2.**
   ```bash
   homelab/tools/coolify-env-set.py --scope oriolj --app pz8iq8s0ws2g48alkfdki128 \
-    --from-file homelab/secrets/openwifipassmap.env METRICS_TOKEN=@OPENWIFIPASSMAP_METRICS_TOKEN SENTRY_DSN=@OPENWIFIPASSMAP_SENTRY_DSN \
-    --from-file homelab/secrets/cloudflare-oriolj.env LITESTREAM_ACCESS_KEY_ID=@ORIOLJ_R2_BACKUPS_ACCESS_KEY_ID LITESTREAM_SECRET_ACCESS_KEY=@ORIOLJ_R2_BACKUPS_SECRET_ACCESS_KEY REPLICA_ENDPOINT=@ORIOLJ_R2_ENDPOINT \
+    --from-file homelab/secrets/openwifipassmap.env METRICS_TOKEN=@OPENWIFIPASSMAP_METRICS_TOKEN,SENTRY_DSN=@OPENWIFIPASSMAP_SENTRY_DSN \
+    --from-file homelab/secrets/cloudflare-oriolj.env LITESTREAM_ACCESS_KEY_ID=@ORIOLJ_R2_BACKUPS_ACCESS_KEY_ID,LITESTREAM_SECRET_ACCESS_KEY=@ORIOLJ_R2_BACKUPS_SECRET_ACCESS_KEY,REPLICA_ENDPOINT=@ORIOLJ_R2_ENDPOINT \
     REPLICA_BUCKET=coolify-backups-oriolj --deploy
   ```
+  KEYS after `--from-file` are ONE comma-separated argument — a space-separated
+  list would set the later keys to the literal `@SOURCE` string.
   WHY: secret values cannot be written to Coolify by an agent. BLOCKED until
   done: the hub scrape (`/metrics` answers 401 to everyone — fail-closed),
   the Grafana dashboard and the six alert rules (all NoData), GlitchTip
