@@ -147,8 +147,8 @@ slow-requests: ## Slowest traced requests on PROD, last 24h (Tempo; every reques
 slow-queries: ## Slowest SQL spans on PROD with the statement text (Tempo, db.system=sqlite): make slow-queries SINCE=2h MIN=50ms
 	@oj-traces sql -p $(P) --since $(SINCE) -n $(LIMIT) --db sqlite $(if $(MIN),--min $(MIN),)
 
-routes: ## p50 / p95 / rate per HTTP route from traces (TraceQL metrics)
-	@oj-traces routes -p $(P) --since $(SINCE)
+routes: ## p50 / p95 / rate per HTTP route from traces (TraceQL metrics; Tempo caps the window below 24h, so the default 24h becomes 23h)
+	@oj-traces routes -p $(P) --since $(if $(filter 24h 1d,$(SINCE)),23h,$(SINCE))
 
 error-traces: ## Traces that ended in an error (every one is kept by the agent)
 	@oj-traces errors -p $(P) --since $(SINCE) -n $(LIMIT)

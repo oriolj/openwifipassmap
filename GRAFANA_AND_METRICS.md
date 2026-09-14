@@ -10,7 +10,7 @@ alert or scrape change — the change log is at the end.
 | What | Where |
 |---|---|
 | Hub | `monitor-1-nc` (hq-monitoring repo, Coolify compose stack; Prometheus + Loki + Tempo + Grafana) |
-| Grafana | `http://monitor-1-nc:3000` (tailnet), org **hq**, folder `hq` |
+| Grafana | `http://monitor-1-nc:3000` (tailnet): dashboards in org **Personal** (id 2), folder `openwifipassmap`; alert rules in org **hq** (id 1), folder `hq` (same split as every personal project) |
 | Dashboards | `OpenWifiPassMap` (uid `openwifipassmap`, `grafana/dashboards/personal/openwifipassmap/openwifipassmap.json`) and `OpenWifiPassMap traces` (uid `openwifipassmap-traces`, same dir) |
 | Prometheus job | `openwifipassmap-app` — `prometheus/prometheus.yml`, **STAGED (commented)** until the token is on both sides (see §6) |
 | Alert group | `openwifipassmap` — `grafana/provisioning/alerting/openwifipassmap.yml` (6 rules, all OK on NoData) |
@@ -135,3 +135,7 @@ since 2026-09-13). Targets: `make logs-prod`, `make logs-prod-grep Q=…`,
 - 2026-09-14 — code reviewed, built and restore-drilled locally (file
   replica), committed and deployed; docs (this file, METRICS.md, DEPLOY.md,
   USER_TODO.md) written; hub files committed (push by the coordinator).
+- 2026-09-14 — deploy `d249d95` verified live (push-triggered, healthy,
+  Litestream file replica + watchdog pinging healthchecks.io, Umami tag in the
+  HTML); staged compose secret + smoke canary committed in hq-monitoring;
+  `make routes` clamps the default window to 23 h (Tempo's metrics cap).

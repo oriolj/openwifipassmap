@@ -45,7 +45,9 @@ the envs above are set).
   (multi-stage: Go build with `SOURCE_COMMIT`, Tailwind/DaisyUI assets,
   alpine runtime with Litestream 0.3.14, non-root `app`) and swaps traffic
   when `/api/health` is green. Push-to-deploy proven: deployments with
-  `is_webhook=true` on 2026-07-23 (commits `0c26bf7`, `b8b7b4b`).
+  `is_webhook=true` on 2026-07-23 (commits `0c26bf7`, `b8b7b4b`) and
+  2026-09-14 (`rdhv8mfsb18ougltx1ztzqhw`, commit `d249d95`, 04:32→04:35 UTC,
+  finished, resource `running:healthy`).
 - **Manual**: Coolify UI → Deploy, or
   `POST https://app.coolify.io/api/v1/deploy?uuid=pz8iq8s0ws2g48alkfdki128` with the personal token.
 - **Verify after every deploy**: `curl -s https://openwifipassmap.oriolj.com/api/health`
@@ -63,8 +65,8 @@ The server always runs under `litestream replicate -exec /app/server`
 
 | Replica | Where | Snapshot / retention | State |
 |---|---|---|---|
-| `file` | same disk, `/var/lib/openwifipassmap/data/replica/generations/<gen>/…` | 6 h / 72 h | live from the first deploy of this build (2026-09-14) — a consistent copy for a host-side rsync, **not** an off-host backup |
-| `s3` (R2) | bucket `coolify-backups-oriolj`, prefix `openwifipassmap/wifispot.db/generations/<gen>/{snapshots,wal}/…`, endpoint `ORIOLJ_R2_ENDPOINT`, region `auto` | 1 h / 168 h | ⏳ envs pending (USER_TODO.md) |
+| `file` | same disk, `/var/lib/openwifipassmap/data/replica/generations/<gen>/…` | 6 h / 72 h | **live in prod since 2026-09-14 04:35 UTC** (log `replicating to name=file`, first snapshot generation `522a658203b8ba8b`) — a consistent copy for a host-side rsync, **not** an off-host backup |
+| `s3` (R2) | bucket `coolify-backups-oriolj`, prefix `openwifipassmap/wifispot.db/generations/<gen>/{snapshots,wal}/…`, endpoint `ORIOLJ_R2_ENDPOINT`, region `auto` | 1 h / 168 h | ⏳ envs pending (USER_TODO.md); prod log says `no LITESTREAM_ACCESS_KEY_ID — local file replica only`, bucket has no `openwifipassmap/` prefix (2026-09-14) |
 
 Read/list with the bucket-scoped key (`cloudflare-oriolj.env`
 `ORIOLJ_R2_BACKUPS_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY`, `ORIOLJ_R2_ENDPOINT`):
@@ -100,30 +102,30 @@ Umami "OpenWifiPassMap · app". Logs/traces wait for the host's Alloy agent.
 
 | Area | Item | State | Notes |
 |---|---|---|---|
-| Deploy | Dockerfile resources, GitHub-App source, push-to-deploy proven (`is_webhook`) | ✅ | Dockerfile app `pz8iq8s0…`, GitHub App source; `is_webhook=true` deployments 2026-07-23; watch_paths listed above (verified via API 2026-09-14) |
-| Deploy | Release identifier (git SHA) visible in app / Sentry | ✅ | `SOURCE_COMMIT` → `/api/health.version`, `X-App-Version`, `app_info`, Sentry `release` (local image verified 2026-09-14; live after this deploy) |
+| Deploy | Dockerfile resources, GitHub-App source, push-to-deploy proven (`is_webhook`) | ✅ | Dockerfile app `pz8iq8s0…`, GitHub App source; `is_webhook=true` deployments 2026-07-23 and 2026-09-14 (`d249d95`); watch_paths listed above (verified via API 2026-09-14) |
+| Deploy | Release identifier (git SHA) visible in app / Sentry | ✅ | live: `/api/health` `"version":"d249d957a038"` + `x-app-version` header (curl 2026-09-14); `app_info` and Sentry `release` carry the same value once the ⏳ envs are set |
 | Deploy | Env values backed up (`coolify-env-backup.sh`, scope token) | ✅ | resource block present in hq `coolify-envs-oriolj.env` (2026-09-13); re-run `--scope oriolj` after the ⏳ envs are set, then re-encrypt |
 | Access | Real hostname + DNS records + TLS (not sslip/pages.dev) | ✅ | `openwifipassmap.oriolj.com`, Let's Encrypt, HTTP/2 200 (2026-09-14) |
 | Access | Admin path randomised; superuser created | ➖ / ✅ | `/admin` is session-gated to the admin account (first account = admin, `docs/deployment.md`); no separate path needed |
 | Health | Coolify UI health check ON for every resource (list the OFF ones + path) | ✅ | ON, `/api/health` :8080, resource `running:healthy` (API 2026-09-14) |
 | Health | Image HEALTHCHECK per role | ✅ | single role; `HEALTHCHECK` on `/api/health` in `docker/Dockerfile` |
 | Backups | Coolify scheduled DB backup → R2 — or the in-stack backup sidecar. Notes MUST say WHERE | ⏳ | product-native Litestream: file replica live, **R2 replica pending the envs** (USER_TODO.md); bucket/prefix/credential names in «Backups» above |
-| Backups | Last backup execution verified (date) | ⏳ | file replica verified locally 2026-09-14; prod evidence = `litestream_replica_wal_bytes` once scraped / container log |
+| Backups | Last backup execution verified (date) | ✅ (same host) / ⏳ (off-host) | prod 2026-09-14: container log `snapshot written replica=file` at 04:35 UTC, `replica/generations/522a658203b8ba8b/{snapshots,wal}` on the host, healthchecks.io `openwifipassmap-litestream` up (18 pings, last 06:00 UTC); no off-host copy until the R2 envs |
 | Backups | Restore tested (date) | ✅ (local) | 2026-09-14 file-replica drill on the image; R2 drill pending |
 | Backups | DB PITR / WAL archiving (needed? configured?) | ✅ | that is what Litestream is (1 s sync, 7 d generations on R2 once live) |
 | Backups | borgmatic for volumes/media on the host | ➖ | jluv-apps-1 has no borg client (server file); the replica dir is the rsync target instead |
 | Backups | Registered in the backupmaker inventory | ⏳ | rsync job for `/var/lib/openwifipassmap/data/replica/` (USER_TODO.md) |
 | Backups | Upload bucket (S3/R2/B2) named here with region + versioning | ➖ | no user uploads; R2 `coolify-backups-oriolj` (region auto) is the replica target only |
 | Backups | hq asset note per database / volume / bucket in `docs/backups/` | ✅ | hq `docs/backups/openwifipassmap-sqlite.md` (2026-09-14, `status: partial`) |
-| Jobs | Scheduler/cron/beat monitored by healthchecks.io pings | ✅ | no scheduler; the Litestream watchdog pings `openwifipassmap-litestream` (check created 2026-09-13, first ping after this deploy) |
-| Observability | Logs shipped (`oj.*` labels → Loki; `make logs`) | ⏳ | labels on the resource ✅; host not enrolled (no Alloy) — Loki empty |
+| Jobs | Scheduler/cron/beat monitored by healthchecks.io pings | ✅ | no scheduler; the Litestream watchdog pings `openwifipassmap-litestream` — status `up`, 18 pings since the 2026-09-14 deploy (API 2026-09-14 06:00 UTC) |
+| Observability | Logs shipped (`oj.*` labels → Loki; `make logs`) | ⏳ | labels on the running container ✅ (`docker inspect` 2026-09-14); host not enrolled (no Alloy) — Loki empty, `make logs-prod-*` answer empty |
 | Observability | Host observability agent (Alloy) on the server | ⏳ | jluv-apps-1 staged in the fleet (USER_TODO.md, hq server file) |
-| Observability | `/metrics` + Prometheus scrape job + Grafana dashboard | ⏳ | endpoint ✅ (bearer, fail-closed); dashboard + job committed in hq-monitoring (job staged/commented); blocked on `METRICS_TOKEN` both sides |
+| Observability | `/metrics` + Prometheus scrape job + Grafana dashboard | ⏳ | endpoint live ✅ (401 without/with any token — fail-closed while `METRICS_TOKEN` is unset); dashboard committed in hq-monitoring, job + compose secret staged/commented (not pushed); blocked on `METRICS_TOKEN` both sides |
 | Observability | Alert rules (Grafana → Pushover) | ✅ (staged) | group `openwifipassmap`, 6 rules OK on NoData, committed 2026-09-14 (hub push by the coordinator) |
 | Observability | Uptime check (Beszel host + the project's group on Gatus) | ✅ | Gatus group `openwifipassmap` (landing + nearby API); Talaia suite every 30 min |
 | Observability | Error tracking (Sentry/GlitchTip DSN, release tagged) | ⏳ | GlitchTip project id 18 ✅, SDK wired with release ✅; `SENTRY_DSN` env pending |
 | Observability | Traces (OTel → host Alloy → Tempo; `<Project> traces` dashboard) | ⏳ | dashboard `openwifipassmap-traces` committed; no OTel exporter in the app and no Alloy on the host |
-| Product | Web analytics on web surfaces (self-hosted, cookieless) | ✅ | Umami "OpenWifiPassMap · app" `55619df2-…` in every template `<head>` (live after this deploy) |
+| Product | Web analytics on web surfaces (self-hosted, cookieless) | ✅ | Umami "OpenWifiPassMap · app" `55619df2-…`: tag in the live HTML (curl 2026-09-14), `stats.oriolj.com/script.js` 200; 0 pageviews recorded yet |
 | Product | Email: Resend sending domain + from address | ✅ | `RESEND_API_KEY` set; from `no-reply@oriolj.com` |
 | Product | Third-party keys (LLM, payments, SEO…) set or explicitly off | ✅ | none needed; Nominatim geocoding is keyless (policy-compliant UA + throttle) |
 | Sites | Comercial site deployed (Pages) + docs site (Starlight) | ➖ | the landing page is the app itself; no separate site |
